@@ -22,7 +22,7 @@ SAFETY: only GetP (reads) here. Never sends 'FRst' (factory reset).
 import struct, time, sys
 import usb.core, usb.util
 
-VID, PID, IFACE, EP_OUT, EP_IN = 0x194F, 0x0422, 5, 0x01, 0x81
+VID, PIDS, IFACE, EP_OUT, EP_IN = 0x194F, (0x0422, 0x0424), 5, 0x01, 0x81
 
 GETP = 0x47657450
 SETP = 0x53657450
@@ -47,7 +47,8 @@ def hexd(b, limit=64):
 
 class Dev:
     def __init__(s):
-        s.dev = usb.core.find(idVendor=VID, idProduct=PID)
+        s.dev = usb.core.find(idVendor=VID,
+                              custom_match=lambda d: d.idProduct in PIDS)
         if s.dev is None: sys.exit("io24 not found — plugged in?")
         usb.util.claim_interface(s.dev, IFACE)
         s.dev.set_interface_altsetting(interface=IFACE, alternate_setting=1)

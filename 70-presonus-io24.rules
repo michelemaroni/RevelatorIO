@@ -2,3 +2,5 @@
 # Grant the logged-in desktop user access to the USB device so libusb can claim
 # the vendor-specific control interface (interface 5) without root.
 SUBSYSTEM=="usb", ATTR{idVendor}=="194f", ATTR{idProduct}=="0422", MODE="0660", TAG+="uaccess"
+# Revelator io44 (twin model, same control protocol)
+SUBSYSTEM=="usb", ATTR{idVendor}=="194f", ATTR{idProduct}=="0424", MODE="0660", TAG+="uaccess"

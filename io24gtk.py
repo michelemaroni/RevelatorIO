@@ -3300,6 +3300,7 @@ class Win(Adw.ApplicationWindow):
         # without one shared guard those GTK signals enqueue fresh DSP writes
         # and can overwrite the state that was just loaded.
         self._adopt_mute = False
+        self._rev_mute = False
         self._order_mute = False
         self._fx_mute = False
         self._phones_source_mute = False
@@ -6622,8 +6623,14 @@ class Win(Adw.ApplicationWindow):
         page.add(lv)
 
         idg = Adw.PreferencesGroup(title="Device")
-        for t, v in (("Model", "Revelator io24"),
-                     ("USB ID", "194f:0422"),
+        self._usb_product = self._usb_sysattr("product") or "Revelator io24"
+        self._usb_id = ""
+        for p in self._usb_entry():
+            self._usb_id = (open(p + "/idVendor").read().strip() + ":" +
+                            open(p + "/idProduct").read().strip())
+            break
+        for t, v in (("Model", self._usb_product),
+                     ("USB ID", self._usb_id),
                      ("Firmware", self._bcd_device()),
                      ("Serial", self._usb_serial())):
             row = Adw.ActionRow(title=t)
@@ -6701,26 +6708,33 @@ class Win(Adw.ApplicationWindow):
         return False
 
     def _usb_serial(self):
-        try:
-            for d in os.listdir("/sys/bus/usb/devices"):
-                b = "/sys/bus/usb/devices/" + d
-                if os.path.exists(b + "/idProduct") and \
-                   open(b + "/idProduct").read().strip() == "0422":
-                    return open(b + "/serial").read().strip()
-        except Exception:
-            pass
+        for p in self._usb_entry():
+            return open(p + "/serial").read().strip()
         return "unknown"
 
     def _bcd_device(self):
+        for p in self._usb_entry():
+            return open(p + "/bcdDevice").read().strip()
+        return "unknown"
+
+    def _usb_sysattr(self, name):
+        for p in self._usb_entry():
+            try:
+                return open(p + "/" + name).read().strip()
+            except Exception:
+                pass
+        return ""
+
+    def _usb_entry(self):
+        """First sysfs entry for the io24/io44 control interface parent."""
         try:
             for d in os.listdir("/sys/bus/usb/devices"):
                 b = "/sys/bus/usb/devices/" + d
                 if os.path.exists(b + "/idProduct") and \
-                   open(b + "/idProduct").read().strip() == "0422":
-                    return open(b + "/bcdDevice").read().strip()
+                   open(b + "/idProduct").read().strip() in ("0422", "0424"):
+                    yield b
         except Exception:
-            pass
-        return "unknown"
+            return
 
     def _apply_rate_change(self, want, previous=None):
         """Pin PipeWire after any required hardware-Delay preflight."""

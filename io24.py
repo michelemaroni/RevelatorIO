@@ -40,7 +40,9 @@ import time
 import usb.core
 import usb.util
 
-VID, PID = 0x194F, 0x0422
+VID = 0x194F
+# io24 and its twin the io44 share one control protocol and control interface.
+PIDS = (0x0422, 0x0424)
 IFACE, EP_OUT, EP_IN = 5, 0x01, 0x81
 
 # FourCC constants (C 'A'<<24|... ; stored little-endian => byte-reversed on wire)
@@ -952,9 +954,11 @@ def inspect_preset(path):
 
 class Io24:
     def __init__(self, shadow=True):
-        self.dev = usb.core.find(idVendor=VID, idProduct=PID)
+        self.dev = usb.core.find(idVendor=VID,
+                                 custom_match=lambda d: d.idProduct in PIDS)
         if self.dev is None:
-            raise SystemExit("Revelator io24 (194f:0422) not found — plugged in?")
+            raise SystemExit("Revelator io24/io44 (194f:0422/0424) "
+                             "not found — plugged in?")
         usb.util.claim_interface(self.dev, IFACE)
         self.dev.set_interface_altsetting(interface=IFACE, alternate_setting=1)
         intf = self.dev.get_active_configuration()[(IFACE, 1)]

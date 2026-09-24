@@ -9,7 +9,7 @@ description = "Native Linux control host for the PreSonus Revelator io24"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { file = "LICENSE" }
-dependencies = ["pyusb>=1.2", "capstone>=5,<6"]
+dependencies = ["pyusb>=1.2", "capstone>=5,<6", "numpy~=2.5"]
 classifiers = [
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
