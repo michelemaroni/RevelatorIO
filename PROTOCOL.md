@@ -2103,6 +2103,37 @@ device→host status only.
 `setParam()` **clamps** every value to the record's min/max, and an id with no
 descriptor is simply not found and silently does nothing.
 
+### ALSA external-control bridge
+
+`io24_alsa_ctl.c` is a client-side ALSA external-control plugin. It translates
+ALSA integer elements into the daemon's newline-delimited JSON requests and
+never opens the USB interface itself. The daemon remains the sole USB owner.
+
+| ALSA control | Daemon field / setter | Range |
+|---|---|---|
+| `Main Volume` | `mainVolume` / `mainvol` | `0..100` ↔ `0..1` |
+| `Headphone Volume` | `hpVolume` / `hpvol` | `0..100` ↔ `0..1` |
+| `Monitor Blend` | `monitorMix` / `blend` | `0..100` ↔ `-1..1`; `50` is the midpoint |
+| `Mic/Inst Capture Gain (dB)` | `input1Gain` / `gain`, channel 1 | `0..60` |
+| `Headset Capture Gain (dB)` | `input2Gain` / `gain`, channel 2 | `0..60` |
+| `Mic/Inst Capture Phantom` | `input1PhantomPower` / `phantom`, channel 1 | boolean |
+| `Mic/Inst Capture Processing` | `flags` / `fxmix`, channel 1 | boolean |
+| `Headset Capture Processing` | `flags` / `fxmix`, channel 2 | boolean |
+| `Main Output Mute` | `flags` bit 1 | read-only |
+
+For `fxmix`, flags bits 5 and 6 are the channel-disabled bits, so a clear bit
+means processing is enabled. The physical Main Mute bit is the inverse: bit 1
+set means muted. The plugin exposes no setter for that bit because the manual
+and wire census do not provide a safe command for the front-panel button.
+Every write is based on the daemon's returned state, not only on the requested
+value; malformed, missing, or rejected state fails closed.
+
+The plugin is intentionally absent from the default `ctl.!default` definition.
+Use the named `io24` control explicitly, normally as `alsamixer -D io24`, so a
+missing daemon or a stopped USB owner cannot silently redirect the desktop's
+normal audio controls. Hardware validation of the read-only mute and any
+additional writable controls remains separate from this software bridge.
+
 ---
 
 ## 7. How this was derived

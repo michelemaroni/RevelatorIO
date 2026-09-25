@@ -1,0 +1,7 @@
+ctl_type.io24 {
+    lib "libasound_module_ctl_io24.so"
+}
+
+ctl.io24 {
+    type io24
+}

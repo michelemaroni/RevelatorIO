@@ -57,6 +57,11 @@ class ReleasePackageTests(unittest.TestCase):
             shutil.copy2(
                 ROOT / "io24_voicefx_delay.c",
                 stage / "io24_voicefx_delay.c")
+            shutil.copy2(ROOT / "io24_alsa_ctl.c", stage / "io24_alsa_ctl.c")
+            (stage / "alsa").mkdir()
+            shutil.copy2(
+                ROOT / "alsa" / "io24.asoundrc",
+                stage / "alsa" / "io24.asoundrc")
             wheel_dir = stage / "wheel"
             result = subprocess.run(
                 [
@@ -104,6 +109,14 @@ class ReleasePackageTests(unittest.TestCase):
                     name for name in names
                     if name.endswith("/share/io24/io24_voicefx_delay.c")
                 ]
+                alsa_source = [
+                    name for name in names
+                    if name.endswith("/share/io24/io24_alsa_ctl.c")
+                ]
+                alsa_config = [
+                    name for name in names
+                    if name.endswith("/share/io24/io24.asoundrc")
+                ]
                 licenses = [
                     name for name in names
                     if name.endswith(".dist-info/licenses/LICENSE")
@@ -125,6 +138,8 @@ class ReleasePackageTests(unittest.TestCase):
             self.assertEqual(len(compressor_source), 1)
             self.assertEqual(len(spring_source), 1)
             self.assertEqual(len(delay_source), 1)
+            self.assertEqual(len(alsa_source), 1)
+            self.assertEqual(len(alsa_config), 1)
             self.assertEqual(len(licenses), 1)
             self.assertEqual(vendor_evidence, [])
 

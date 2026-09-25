@@ -47,4 +47,10 @@ py-modules = [
 ]
 
 [tool.setuptools.data-files]
-"share/io24" = ["io24_uc_comp.c", "io24_spring.c", "io24_voicefx_delay.c"]
+"share/io24" = [
+    "io24_uc_comp.c",
+    "io24_spring.c",
+    "io24_voicefx_delay.c",
+    "io24_alsa_ctl.c",
+    "alsa/io24.asoundrc",
+]

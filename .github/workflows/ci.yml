@@ -28,16 +28,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install the documented GTK runtime
+      - name: Install the documented GTK and ALSA build runtimes
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             python3-gi python3-gi-cairo python3-venv \
-            gir1.2-gtk-4.0 gir1.2-adw-1
+            gir1.2-gtk-4.0 gir1.2-adw-1 \
+            alsa-utils libasound2-dev libjson-c-dev
       - name: Install project and test tools
         run: |
           python3 -m venv --system-site-packages .venv
           .venv/bin/python -m pip install --upgrade pip setuptools wheel '.[test]'
+      - name: Build and test the ALSA control bridge
+        run: make test
       - name: Run hardware-free release suite
         run: >-
           .venv/bin/python -m pytest -q

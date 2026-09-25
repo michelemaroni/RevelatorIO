@@ -51,6 +51,42 @@ If `pyusb` reports `No backend available`, the libusb system package is
 missing. If the device is connected but `io24 status` cannot find it, recheck
 the udev rule and replug the interface.
 
+## ALSA control bridge
+
+The optional native bridge exposes the device's readable, safely writable
+controls to stock `alsamixer` and `amixer` without opening USB in the mixer:
+
+```bash
+sudo apt install libasound2-dev libjson-c-dev alsa-utils
+make
+sudo make install PREFIX=/usr
+```
+
+Add this once to `~/.asoundrc`, keeping any existing ALSA configuration:
+
+```text
+</usr/share/io24/io24.asoundrc>
+```
+
+Start `io24d` first, then select the bridge explicitly:
+
+```bash
+alsamixer -D io24
+amixer -D io24 contents
+```
+
+`Main Volume` and `Headphone Volume` use `0..100`; `Monitor Blend` uses
+`0..100` with `50` as the device midpoint; input gains use `0..60` dB. The
+phantom and per-input processing controls are booleans. `Main Output Mute` is
+read-only because the physical front-panel state is readable but has no proven
+host write command. Input mutes, processing assignment, HPF, and other controls
+without trustworthy readback are intentionally not exposed.
+
+The bridge is a client of `io24d`; it never replaces the default PipeWire ALSA
+control. It uses `IO24D_SOCKET` when set, otherwise
+`$XDG_RUNTIME_DIR/io24d.sock`, and reports an error if the daemon is unavailable.
+Run the hardware-free native test with `make test`.
+
 ## What works
 
 The Host covers the parts of Universal Control you are likely to use every
@@ -298,6 +334,9 @@ older section disagrees.
 | `io24_spring.py` | Host spring processor and PipeWire route control |
 | `io24_scene.py` | Universal Control scene import/export |
 | `io24d.py` | local JSON-lines daemon for custom clients |
+| `io24_alsa_ctl.c` | native ALSA external-control bridge for `alsamixer` |
+| `Makefile` | native bridge build, install, and hardware-free test target |
+| `alsa/io24.asoundrc` | ALSA `ctl.io24` configuration |
 | `ucnet_shim.py` | UCNET compatibility layer |
 | `PROTOCOL.md` | reverse-engineering record and evidence boundaries |
 | `GUIDE.md` | detailed user guide |
@@ -330,6 +369,7 @@ suite:
 python3 -m venv --system-site-packages .venv
 .venv/bin/python -m pip install -e '.[test]'
 .venv/bin/python -m pytest -q
+make test
 ```
 
 Hardware, USB, audio-routing, firmware, and preset persistence checks are never
