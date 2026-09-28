@@ -87,6 +87,72 @@ control. It uses `IO24D_SOCKET` when set, otherwise
 `$XDG_RUNTIME_DIR/io24d.sock`, and reports an error if the daemon is unavailable.
 Run the hardware-free native test with `make test`.
 
+## Uninstall
+
+Everything the project puts outside this repository can be removed. The
+repository checkout and the `.venv` stay untouched; delete them by hand if you
+want a fully clean slate. Run each step only if you used that part.
+
+Remove the ALSA bridge (repeat the `PREFIX` you installed with — the default
+is `/usr/local`, the README example uses `/usr`):
+
+```bash
+cd /path/to/io24
+sudo make uninstall PREFIX=/usr
+```
+
+Then remove the include line from `~/.asoundrc`. If that line is the only
+content, delete the file:
+
+```bash
+rm ~/.asoundrc
+```
+
+Without this step every ALSA program fails to start with
+`Cannot access file /usr/share/io24/io24.asoundrc` errors, because the include
+now points at a removed file. `make uninstall` prints a reminder but does not
+edit your home file: it runs as root, so it would touch the wrong `$HOME`, and
+the file may contain unrelated configuration.
+
+Remove the udev rule. Without it the Host can no longer open the USB device
+as your desktop user; audio keeps working because the interface remains
+class-compliant:
+
+```bash
+sudo rm /etc/udev/rules.d/70-presonus-io24.rules
+sudo udevadm control --reload-rules
+```
+
+Remove the desktop launcher, if you installed it:
+
+```bash
+./install-desktop.sh --remove
+```
+
+Remove the systemd startup unit, if you enabled it:
+
+```bash
+systemctl --user disable --now io24-startup
+rm ~/.config/systemd/user/io24-startup.service
+systemctl --user daemon-reload
+```
+
+Remove the Python package from the virtual environment, if you installed it:
+
+```bash
+.venv/bin/pip uninstall io24
+```
+
+Optional cached state (the Host-side shadow of last writes; safe to delete):
+
+```bash
+rm -rf ~/.cache/io24
+```
+
+After these steps the system is back to stock: the io24 keeps working as a
+class-compliant interface through PipeWire, with no custom ALSA configuration,
+no udev rule, and no host-side services.
+
 ## What works
 
 The Host covers the parts of Universal Control you are likely to use every

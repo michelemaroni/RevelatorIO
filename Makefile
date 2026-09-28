@@ -26,8 +26,11 @@ install: $(PLUGIN)
 	install -m 644 "alsa/io24.asoundrc" "$(DESTDIR)$(DATADIR)/io24/io24.asoundrc"
 
 uninstall:
+	@echo "Removing $(DESTDIR)$(LIBDIR)/alsa-lib/libasound_module_ctl_io24.so"
+	@echo "Removing $(DESTDIR)$(DATADIR)/io24/io24.asoundrc"
 	rm -f "$(DESTDIR)$(LIBDIR)/alsa-lib/libasound_module_ctl_io24.so" "$(DESTDIR)$(DATADIR)/io24/io24.asoundrc"
 	-rmdir --ignore-fail-on-non-empty "$(DESTDIR)$(LIBDIR)/alsa-lib" "$(DESTDIR)$(DATADIR)/io24"
+	@echo "Note: if ~/.asoundrc contains '</$(DATADIR)/io24/io24.asoundrc>', remove that line or ALSA config loading will fail."
 
 test: $(PLUGIN)
 	ALSA_PLUGIN_DIR="$(CURDIR)/build" python3 -m unittest -v tests/test_io24_alsa_ctl.py
