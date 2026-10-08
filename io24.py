@@ -1189,9 +1189,10 @@ class Io24:
         self.set_param(2, max(0.0, min(1.0, value)))
 
     def set_gain(self, channel, db):
-        """Preamp gain in dB, 0..60. channel 1 or 2 ('Para' wire id 3)."""
-        if channel not in (1, 2):
-            raise ValueError("channel must be 1 or 2")
+        """Preamp gain in dB, 0..60. channel 1..3 ('Para' wire id 3)."""
+        if channel not in self.line_inputs:
+            raise ValueError("channel must be %s"
+                             % " or ".join(str(c) for c in self.line_inputs))
         self.set_param(3, max(0.0, min(60.0, db)), index=channel - 1)
 
     def set_fx_mix(self, channel, value):
@@ -1268,14 +1269,16 @@ class Io24:
 
     def set_highpass(self, channel, on):
         """Input high-pass filter ('Pari' wire id 5)."""
-        if channel not in (1, 2):
-            raise ValueError("channel must be 1 or 2")
+        if channel not in self.line_inputs:
+            raise ValueError("channel must be %s"
+                             % " or ".join(str(c) for c in self.line_inputs))
         self.set_param(5, 1 if on else 0, index=channel - 1, as_int=True)
 
     def set_mute(self, channel, on):
         """Input mute ('Pari' wire id 7)."""
-        if channel not in (1, 2):
-            raise ValueError("channel must be 1 or 2")
+        if channel not in self.line_inputs:
+            raise ValueError("channel must be %s"
+                             % " or ".join(str(c) for c in self.line_inputs))
         self.set_param(7, 1 if on else 0, index=channel - 1, as_int=True)
 
     def set_hp_mute(self, on):
@@ -1675,10 +1678,21 @@ class Io24:
     # the GTK surface behave like UC without pretending the labels were sent
     # to firmware.
     COMPONENT_PATHS = frozenset({
-        "line/ch1", "line/ch2",
+        "line/ch1", "line/ch2", "line/ch3",
         "return/ch1", "return/ch2", "return/ch3",
         "fxreturn/ch1", "aux/ch1", "aux/ch2", "main/ch1",
     })
+
+    @property
+    def is_io44(self):
+        """True for the twin io44: it adds a third analog input (line/ch3)."""
+        dev = getattr(self, "dev", None)
+        return int(getattr(dev, "idProduct", 0)) == 0x0424
+
+    @property
+    def line_inputs(self):
+        """Analog input channel numbers the attached unit actually has."""
+        return (1, 2, 3) if self.is_io44 else (1, 2)
 
     # Universal Control's own vocabulary for the same three buses. Its object
     # model gives every channel a `volume`, an `aux1` and an `aux2` (descriptor
@@ -1978,9 +1992,15 @@ class Io24:
     # saved while soloing still holds the real mix.
     #
     # line/ch3 is the generic backend's third analog input. The io24 has two,
-    # and nothing has shown that source id 6 exists here (the parameter matrix
-    # blocks it on applicability), so solo never writes it.
-    SOLO_SOURCES = tuple(s for s in MIXER_SOURCES if s != "line/ch3")
+    # and nothing on it shows source id 6 (the parameter matrix blocks it on
+    # applicability), so solo never writes it there. The io44 does have that
+    # third input, so it exits solo the same way every other source does.
+    @property
+    def SOLO_SOURCES(self):
+        if self.is_io44:
+            return tuple(self.MIXER_SOURCES)
+        return tuple(s for s in self.MIXER_SOURCES
+                     if s != "line/ch3")
 
     def _solo_state(self):
         if getattr(self, "_solo", None) is None:

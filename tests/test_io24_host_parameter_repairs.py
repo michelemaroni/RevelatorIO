@@ -1272,6 +1272,9 @@ class HostRefinementTests(unittest.TestCase):
             def set_hexpand(self, value):
                 self.hexpand = value
 
+            def set_visible(self, value):
+                self.visible = value
+
         class Scrolled:
             def set_child(self, child):
                 self.child = child
@@ -1291,11 +1294,11 @@ class HostRefinementTests(unittest.TestCase):
             def set_hexpand(self, value):
                 self.hexpand = value
 
-        strips = [Strip() for _ in range(4)]
+        strips = [Strip() for _ in range(5)]
         host = SimpleNamespace(
             _input_strip=lambda ch: strips[ch - 1],
-            _bus_strip=lambda: strips[2],
-            _master_strip=lambda: strips[3],
+            _bus_strip=lambda: strips[3],
+            _master_strip=lambda: strips[4],
         )
         with mock.patch.object(io24gtk.Gtk, "Box", Box), \
                 mock.patch.object(io24gtk.Gtk, "ScrolledWindow", Scrolled), \
@@ -1310,7 +1313,7 @@ class HostRefinementTests(unittest.TestCase):
         self.assertEqual(
             page.policy[0], io24gtk.Gtk.PolicyType.NEVER)
         self.assertEqual([strip.hexpand for strip in strips],
-                         [True, True, True, True])
+                         [True, True, True, True, True])
 
     def test_mixer_fader_banks_grow_vertically_at_large_window_sizes(self):
         class Box:

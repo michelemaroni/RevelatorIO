@@ -64,6 +64,27 @@ class _OrderOnlyIo24(_MixerOnlyIo24):
         }
 
 
+class _ModeledIo24(_MixerOnlyIo24):
+    """Mixer backend plus a controllable USB identity (io24 vs io44)."""
+
+    def __init__(self, product=0x0422):
+        super().__init__()
+        self._product = product
+        self.param_calls = []
+
+    @property
+    def dev(self):
+        return _FakeUsbDevice(self._product)
+
+    def set_param(self, *args, **kwargs):
+        self.param_calls.append((args, kwargs))
+
+
+class _FakeUsbDevice:
+    def __init__(self, idProduct):
+        self.idProduct = idProduct
+
+
 class HostStateRepairTests(unittest.TestCase):
     def test_assigning_an_uninitialised_send_materialises_unity(self):
         dev = _MixerOnlyIo24()
@@ -647,6 +668,27 @@ class HostStateRepairTests(unittest.TestCase):
         self.assertIn('off.set_tooltip_text("Add to mix at 0 dB")', source)
         self.assertIn('("mixa", "Mix A", "USB capture 3–4")', source)
         self.assertIn('("mixb", "Mix B", "USB capture 5–6")', source)
+
+    def test_line_input_channel_three_is_io44_only(self):
+        io24_dev = _ModeledIo24(0x0422)
+        with self.assertRaises(ValueError):
+            io24_dev.set_gain(3, 30.0)
+        with self.assertRaises(ValueError):
+            io24_dev.set_mute(3, True)
+        with self.assertRaises(ValueError):
+            io24_dev.set_highpass(3, True)
+        self.assertNotIn("line/ch3", io24_dev.SOLO_SOURCES)
+
+        io44 = _ModeledIo24(0x0424)
+        io44.set_gain(3, 30.0)
+        io44.set_mute(3, True)
+        io44.set_highpass(3, True)
+        with self.assertRaises(ValueError):
+            io44.set_phantom(3, True)
+        self.assertIn("line/ch3", tuple(io44.SOLO_SOURCES))
+        self.assertEqual(len(io44.param_calls), 3)
+        self.assertEqual(
+            io44.param_calls[0][1]["index"], 2)   # index 2 = ch3
 
 if __name__ == "__main__":
     unittest.main()

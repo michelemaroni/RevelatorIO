@@ -46,7 +46,7 @@ class _HardwareFreeIo24(io24.Io24):
         self.dev = type("UsbIdentity", (), {
             "serial_number": "TEST-IO24-001",
             "idVendor": io24.VID,
-            "idProduct": io24.PID,
+            "idProduct": io24.PIDS[0],
             "bcdDevice": 0x0128,
         })()
         self._shadow = {}

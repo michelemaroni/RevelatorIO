@@ -55,11 +55,15 @@ from io24_preset_record import (           # noqa: E402
 from io24d import Device, wait_for_device  # noqa: E402
 
 # JaSt slots (PROTOCOL.md §6)
-M_IN1, M_IN2 = 4, 6
+M_IN1, M_IN2, M_IN3 = 4, 6, 8
 M_MAIN = (12, 13)
 M_MIXA = (14, 15)
 M_MIXB = (16, 17)
-P_HP, P_MAIN, P_BLEND, P_G1, P_G2 = 43, 44, 45, 46, 47
+P_HP, P_MAIN, P_BLEND = 43, 44, 45
+P_G1, P_G2, P_G3 = 46, 47, 48
+# ponytail: slots 8 and 48 are the io44 line-in meter/gain, guessed as the
+# next consecutive slot each. Confirm against an io44 state blob when it next
+# stays on the bus; wrong here only misdraws the hidden-on-io24 strip.
 
 PROFILE = bool(os.environ.get('IO24_PROFILE'))
 BAND_NAMES = [spec["name"] for spec in io24_presets.STANDARD_EQ_BAND_SPECS]
@@ -579,11 +583,12 @@ class Ctl:
         self.dev = dev
         cached = self._cached_shadow_count(dev)
         self.snap = {
-            "in": [-99.0, -99.0], "main": [-99.0, -99.0],
+            "in": [-99.0, -99.0, -99.0], "main": [-99.0, -99.0],
             "mixa": [-99.0, -99.0], "mixb": [-99.0, -99.0],
-            "gain": [0.0, 0.0], "hp": 0.0, "mainvol": 0.0, "blend": 0.0,
+            "gain": [0.0, 0.0, 0.0], "hp": 0.0, "mainvol": 0.0, "blend": 0.0,
             "phantom": [False, False], "gr": {1: {"gate": 0.0, "comp": 0.0, "lim": 0.0},
-                   2: {"gate": 0.0, "comp": 0.0, "lim": 0.0}},
+                   2: {"gate": 0.0, "comp": 0.0, "lim": 0.0},
+                   3: {"gate": 0.0, "comp": 0.0, "lim": 0.0}},
             "sel": [0, 2], "chsel": [True, False],
             "preset_off": [False, False], "preset_slot": [0, 0],
             "mute": [False, False], "hpmute": False, "link": False,
@@ -676,7 +681,7 @@ class Ctl:
                     f = self.dev.dev.floats(rsp) if rsp else None
                     if n % 6 == 0 and f:
                         gr = {}
-                        for ch in (1, 2):
+                        for ch in (1, 2, 3):
                             g = {}
                             for blk in ("gate", "comp", "lim "):
                                 r = self.dev.dev.read_reduction(blk, ch)
@@ -685,11 +690,11 @@ class Ctl:
                         self.snap["gr"] = gr
                 if f:
                     s = self.snap
-                    s["in"] = [db(f[M_IN1]), db(f[M_IN2])]
+                    s["in"] = [db(f[M_IN1]), db(f[M_IN2]), db(f[M_IN3])]
                     s["main"] = [db(f[i]) for i in M_MAIN]
                     s["mixa"] = [db(f[i]) for i in M_MIXA]
                     s["mixb"] = [db(f[i]) for i in M_MIXB]
-                    s["gain"] = [f[P_G1], f[P_G2]]
+                    s["gain"] = [f[P_G1], f[P_G2], f[P_G3]]
                     s["hp"], s["mainvol"], s["blend"] = f[P_HP], f[P_MAIN], f[P_BLEND]
                     raw = struct.pack("<f", f[50])
                     s["phantom"] = [bool(raw[0]), bool(raw[1])]
@@ -4074,7 +4079,20 @@ class Win(Adw.ApplicationWindow):
             else:
                 self.say("Revelator io24 connected")
                 GLib.idle_add(self._sync_mix_widgets)
+        show_linein = self._is_io44()
+        self.linein_strip.set_visible(show_linein)
+        for w in getattr(self, "_linein_routing_widgets", ()):
+            w.set_visible(show_linein)
         return True
+
+    def _is_io44(self):
+        """Whether the enumerated control device is the twin io44."""
+        for p in self._usb_entry():
+            try:
+                return open(p + "/idProduct").read().strip() == "0424"
+            except Exception:
+                return False
+        return False
 
     def _fx_anim(self):
         """Advance the FX signature. Only while its page is visible — an
@@ -4363,7 +4381,8 @@ class Win(Adw.ApplicationWindow):
         indicator = PresetIndicator()
         self.preset_indicators = getattr(self, "preset_indicators", {})
         self.preset_indicators[ch] = indicator
-        box = self._strip("Channel %d" % ch, title_suffix=indicator)
+        title = "Line in" if ch == 3 else "Channel %d" % ch
+        box = self._strip(title, title_suffix=indicator)
         row = mixer_fader_bank(8)           # 260 px is a floor; it grows
         m = Meter()
         self.meters["in%d" % ch] = m
@@ -4389,8 +4408,12 @@ class Win(Adw.ApplicationWindow):
         self.autogain_toggles = getattr(self, "autogain_toggles", {})
         self.autogain_toggles[ch] = auto
 
-        for label, param in (("48V", "phantom"), ("Mute", "mute"),
-                             ("HPF", "hpf")):
+        # A line input (io44 ch3) carries no phantom bus, so it gets no 48V
+        # button; its mute/HPF are write-only, exactly as they already are on
+        # the two microphone inputs.
+        params = (("Mute", "mute"), ("HPF", "hpf")) if ch == 3 else \
+            (("48V", "phantom"), ("Mute", "mute"), ("HPF", "hpf"))
+        for label, param in params:
             t = Gtk.ToggleButton(label=label)
             t.set_margin_start(6); t.set_margin_end(6)
             self.live.append(Live(t, lambda v, p=param, c=ch: self._set(p, c, v),
@@ -4412,7 +4435,7 @@ class Win(Adw.ApplicationWindow):
         g.set_margin_top(6)
         box.append(g)
         if not hasattr(self, "gr_bars"):
-            self.gr_bars = {1: {}, 2: {}}
+            self.gr_bars = {1: {}, 2: {}, 3: {}}
         if True:
             for key, nm in (("gate", "Gate"), ("comp", "Comp"), ("lim", "Lim")):
                 r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -4571,8 +4594,12 @@ class Win(Adw.ApplicationWindow):
         b = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2,
                     homogeneous=True)
         b.set_margin_start(6); b.set_margin_end(6)
+        # The io44's third input (line/ch3). Built always so the worker feeds it
+        # and attach can reveal it; hidden until that unit is actually present.
+        self.linein_strip = self._input_strip(3)
+        self.linein_strip.set_visible(False)
         strips = (self._input_strip(1), self._input_strip(2),
-                  self._bus_strip(), self._master_strip())
+                  self.linein_strip, self._bus_strip(), self._master_strip())
         for w in strips:
             w.set_hexpand(True)
             b.append(w)
@@ -6257,6 +6284,7 @@ class Win(Adw.ApplicationWindow):
                 self._adopt_processing_mix(ch, 0.0 if off else 1.0)
 
     SOURCES = [("line/ch1", "Input 1"), ("line/ch2", "Input 2"),
+               ("line/ch3", "Line in"),
                ("return/ch1", "USB playback 1-2"), ("return/ch2", "USB playback 3-4"),
                ("return/ch3", "USB playback 5-6"), ("fxreturn/ch1", "FX return")]
     BUSES = [("main", "Main out"), ("mixa", "Mix A"), ("mixb", "Mix B")]
@@ -6353,6 +6381,9 @@ class Win(Adw.ApplicationWindow):
         sep.set_margin_top(2); sep.set_margin_bottom(2)
         grid.attach(sep, 0, 2, 4, 1)
 
+        # The io44's line-input row is hidden on the io24 (same rule as the
+        # mixer strip: line/ch3 does not exist there, so no dead solo/route).
+        self._linein_routing_widgets = []
         for rown, (src, sname) in enumerate(self.SOURCES):
             source_head = Gtk.Box(
                 orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -6368,6 +6399,8 @@ class Win(Adw.ApplicationWindow):
                 source_head.append(source_mute)
                 self.source_mute_widgets[src] = source_mute
             grid.attach(source_head, 0, 3 + rown, 1, 1)
+            if src == "line/ch3":
+                self._linein_routing_widgets.append(source_head)
             for col, (bus, bname) in enumerate(self.BUSES):
                 cellbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                                   spacing=4)
@@ -6406,6 +6439,8 @@ class Win(Adw.ApplicationWindow):
                 cellbox.append(sc); cellbox.append(lbl); cellbox.append(off)
                 cellbox.append(solo)
                 grid.attach(cellbox, 1 + col, 3 + rown, 1, 1)
+                if src == "line/ch3":
+                    self._linein_routing_widgets.append(cellbox)
                 self.mix_widgets[(src, bus)] = (sc, off)
                 self.solo_widgets[(src, bus)] = solo
 
@@ -7044,6 +7079,7 @@ class Win(Adw.ApplicationWindow):
         self.component_name_rows = {}
         for component, title in (
                 ("line/ch1", "Input 1"), ("line/ch2", "Input 2"),
+                ("line/ch3", "Line in"),
                 ("return/ch1", "USB playback 1–2"),
                 ("return/ch2", "USB playback 3–4"),
                 ("return/ch3", "USB playback 5–6"),
@@ -8644,7 +8680,7 @@ class Win(Adw.ApplicationWindow):
         on = button.get_active()
         chans = (1, 2) if getattr(self, "link_both", False) else (ch,)
         if not hasattr(self, "_autogain_on"):
-            self._autogain_on = {1: False, 2: False}
+            self._autogain_on = {1: False, 2: False, 3: False}
         self._autogain_sync = True
         try:
             for c in chans:
@@ -8689,7 +8725,7 @@ class Win(Adw.ApplicationWindow):
         return None
 
     def _autogain_groups(self):
-        on = tuple(c for c in (1, 2)
+        on = tuple(c for c in (1, 2, 3)
                    if getattr(self, "_autogain_on", {}).get(c))
         if getattr(self, "link_both", False) and on == (1, 2):
             return [on]
@@ -9895,6 +9931,7 @@ class Win(Adw.ApplicationWindow):
         if page == "mix":
             self.meters["in1"].set_db(s["in"][0])
             self.meters["in2"].set_db(s["in"][1])
+            self.meters["in3"].set_db(s["in"][2])
             for bus in ("main", "mixa", "mixb"):
                 for side in (0, 1):
                     self.meters["%s%d" % (bus, side)].set_db(s[bus][side])
@@ -9919,8 +9956,9 @@ class Win(Adw.ApplicationWindow):
         if not s["alive"]:
             return True
         self._maybe_resume(s)
-        for ch in (1, 2):
+        for ch in (1, 2, 3):
             self.gain_faders[ch].pull(s["gain"][ch - 1])
+        for ch in (1, 2):
             self.phantom_live[ch].pull(s["phantom"][ch - 1])
         self.mon["mainvol"].pull(s["mainvol"])
         self.mon["hp"].pull(s["hp"])
