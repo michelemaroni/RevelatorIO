@@ -107,8 +107,41 @@ class ScenePlanTests(unittest.TestCase):
         self.assertEqual(fx[2]["fs"], 48000.0)
         reverb = next(call for call in calls if call[0] == "set_reverb")
         self.assertEqual(reverb[2]["fs"], 48000.0)
-        self.assertTrue(any("pan is not representable" in skip for skip in skips))
+        self.assertFalse(any(".pan = 0.5" in skip for skip in skips))
+        self.assertFalse(any(".FXA = -96" in skip for skip in skips))
+        self.assertFalse(any(".dawpostdsp = 1" in skip for skip in skips))
+        self.assertFalse(any(".mono = 0" in skip for skip in skips))
+        self.assertTrue(any("stereopan" in skip for skip in skips))
         self.assertFalse(any("voicefx" in skip.lower() for skip in skips))
+
+    def test_fixed_uc_mixer_states_are_satisfied_without_false_omissions(self):
+        scene = _scene()
+        for component in scene["line"].values():
+            component.update(pan=0.5, FXA=-96.0, dawpostdsp=1)
+        for section in ("aux", "main"):
+            for component in scene[section].values():
+                component["mono"] = 0
+
+        _calls, skips = io24_scene.plan(scene, sample_rate_hz=48000.0)
+
+        self.assertFalse(any(".pan =" in skip for skip in skips))
+        self.assertFalse(any(".FXA =" in skip for skip in skips))
+        self.assertFalse(any(".dawpostdsp =" in skip for skip in skips))
+        self.assertFalse(any(".mono =" in skip for skip in skips))
+
+    def test_nonfixed_uc_mixer_requests_remain_explicit_omissions(self):
+        scene = _scene()
+        scene["line"]["ch1"].update(
+            pan=0.25, FXA=-12.0, dawpostdsp=0)
+        scene["main"]["ch1"]["mono"] = 1
+
+        _calls, skips = io24_scene.plan(scene, sample_rate_hz=48000.0)
+
+        self.assertTrue(any("line.ch1.pan = 0.25" in item for item in skips))
+        self.assertTrue(any("line.ch1.FXA = -12.0" in item for item in skips))
+        self.assertTrue(any("line.ch1.dawpostdsp = 0" in item
+                            for item in skips))
+        self.assertTrue(any("main.ch1.mono = 1" in item for item in skips))
 
     def test_delay_scene_at_96khz_is_rejected_during_planning(self):
         with self.assertRaisesRegex(RuntimeError, "96 kHz"):

@@ -269,7 +269,7 @@ class GlobalFxTests(unittest.TestCase):
         self.assertTrue(powers["ringmod"].get_active())
         self.assertFalse(powers["transformer"].get_active())
 
-    def test_selected_power_adapter_keeps_each_model_independent(self):
+    def test_selected_power_adapter_enforces_one_active_model(self):
         selector = _Value(0)
         controls = {
             "transformer": _Value(True),
@@ -283,8 +283,60 @@ class GlobalFxTests(unittest.TestCase):
         self.assertFalse(power.get_active())
         power.set_active(True)
         self.assertTrue(controls["delay"].get_active())
+        self.assertFalse(controls["transformer"].get_active())
         selector.value = 0
+        power.set_active(True)
         self.assertTrue(controls["transformer"].get_active())
+        self.assertFalse(controls["delay"].get_active())
+
+    def test_turning_on_a_rack_switch_turns_every_other_model_off(self):
+        powers = {model: _Value(False) for model in io24gtk.Win.FX_ORDER}
+        powers["transformer"].set_value(True)
+        powers["delay"].set_value(True)
+        pushes = []
+        host = SimpleNamespace(
+            FX_ORDER=io24gtk.Win.FX_ORDER,
+            fx_model=_Value(io24gtk.Win.FX_ORDER.index("delay")),
+            fx_power=powers,
+            _fx_mute=False,
+            _adopt_mute=False,
+            fx_rack=None,
+            fx_visual=None,
+            _push_fx=lambda: pushes.append("push"),
+        )
+        host.fx_arm = io24gtk._SelectedFxPower(
+            host.fx_model, powers, host.FX_ORDER)
+
+        io24gtk.Win._fx_power_changed(host, "delay")
+
+        self.assertTrue(powers["delay"].get_active())
+        self.assertTrue(all(
+            not control.get_active()
+            for model, control in powers.items() if model != "delay"))
+        self.assertEqual(pushes, ["push"])
+
+    def test_selecting_an_off_model_clears_the_old_models_on_light(self):
+        powers = {model: _Value(False) for model in io24gtk.Win.FX_ORDER}
+        powers["transformer"].set_value(True)
+        pushes = []
+        host = SimpleNamespace(
+            FX_ORDER=io24gtk.Win.FX_ORDER,
+            fx_model=_Value(io24gtk.Win.FX_ORDER.index("detuner")),
+            fx_power=powers,
+            _fx_mute=False,
+            fx_visual=None,
+            fx_param_stack=None,
+            fx_rack=None,
+            _push_fx=lambda: pushes.append("push"),
+        )
+        host.fx_arm = io24gtk._SelectedFxPower(
+            host.fx_model, powers, host.FX_ORDER)
+
+        io24gtk.Win._fx_model_changed(host)
+
+        self.assertFalse(powers["transformer"].get_active())
+        self.assertFalse(powers["detuner"].get_active())
+        self.assertEqual(pushes, ["push"])
 
     def test_fx_edit_assigns_the_selected_input_before_model_state(self):
         calls = []

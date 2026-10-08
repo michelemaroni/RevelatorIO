@@ -74,6 +74,14 @@ class HostDelayActionTests(unittest.TestCase):
 
         self.assertEqual([], device.calls)
 
+    def test_refuses_an_unsafe_rate_before_reasserting_channel2(self):
+        device = _HostActionDevice()
+
+        with self.assertRaisesRegex(RuntimeError, "above 48 kHz"):
+            io24.arm_channel2_delay(device, sample_rate_hz=96000.0)
+
+        self.assertEqual([], device.calls)
+
 
 if __name__ == "__main__":
     unittest.main()

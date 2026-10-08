@@ -68,11 +68,17 @@ class PublicationDocumentationTests(unittest.TestCase):
         self.assertIn("**Voice FX input**", guide)
         self.assertIn("processingChannel", guide)
         self.assertIn("does not display a permanently disabled control", guide)
-        self.assertIn("The io24's hardware Delay is never selected at 96 kHz",
+        self.assertIn("The io24's hardware Delay is never selected above 48 kHz",
                       readme)
-        self.assertIn("Host processing at 96 kHz", (ROOT / "io24gtk.py").read_text())
-        self.assertIn("USB 1-2", guide)
+        self.assertIn("Host processing at %.4g kHz",
+                      (ROOT / "io24gtk.py").read_text())
+        self.assertNotIn("automatic preamp gain, as in Universal", guide)
+        self.assertIn("three-second window", guide)
         self.assertNotIn("must expose all\nsix playback channels", guide)
+        self.assertNotIn("Host spring reverb", readme)
+        self.assertNotIn("Host spring reverb", guide)
+        self.assertNotIn("io24_spring", readme)
+        self.assertNotIn("io24_spring", guide)
 
     def test_github_facing_copy_is_plain_and_credits_prior_work(self):
         readme = (ROOT / "README.md").read_text()
@@ -81,7 +87,10 @@ class PublicationDocumentationTests(unittest.TestCase):
 
         self.assertIn(
             "https://github.com/oddbear/Revelator.io24.Api", readme)
-        self.assertIn("There is no browser or phone", readme)
+        self.assertIn("There is no browser service", readme)
+        self.assertIn(
+            "https://github.com/Ajuntanaga/io24-android", readme)
+        self.assertNotIn("lives under", readme)
         for filename in front_facing:
             with self.subTest(filename=filename):
                 self.assertNotIn("—", (ROOT / filename).read_text())
@@ -113,6 +122,89 @@ class PublicationDocumentationTests(unittest.TestCase):
         self.assertIn("None of it is included", publication)
         self.assertIn("never a CI requirement", publication)
         self.assertIn("Ajuntanaga/io24", publication)
+        self.assertIn("Ajuntanaga/io24-android", publication)
+        self.assertIn("neutral 1,028-byte native-slot structural template",
+                      publication)
+
+    def test_ci_names_only_existing_host_tests(self):
+        workflow_path = ROOT / ".github/workflows/ci.yml"
+        workflow_text = workflow_path.read_text()
+        referenced = sorted(set(re.findall(
+            r"tests/[A-Za-z0-9_.-]+\.py", workflow_text)))
+
+        self.assertTrue(workflow_text.strip())
+        self.assertNotIn("tests/test_io24_spring.py", referenced)
+        self.assertNotIn("tests/test_android_probe_contract.py", referenced)
+        for required in (
+                "tests/test_io24_host_autogain.py",
+                "tests/test_io24_host_delay_action.py",
+                "tests/test_io24_native_stat.py",
+                "tests/test_io24_preset_persistence.py",
+                "tests/test_io24_presets_page.py",
+                "tests/test_io24_voicefx_preset_apply.py"):
+            self.assertIn(required, referenced)
+        self.assertNotIn("testDebugUnitTest", workflow_text)
+        self.assertNotIn("setup-java", workflow_text)
+        self.assertEqual(
+            [path for path in referenced if not (ROOT / path).is_file()], [])
+
+    def test_public_runtime_has_no_private_workspace_fallbacks(self):
+        sources = (
+            "io24_alt_eq.py",
+            "io24_native_stat.py",
+            "io24_uc472_passive_eq.py",
+            "io24_uc472_vintage_eq.py",
+        )
+        for filename in sources:
+            text = (ROOT / filename).read_text()
+            with self.subTest(filename=filename):
+                self.assertNotIn(".superpowers/", text)
+                self.assertNotRegex(text, r"runs/20\d{6}")
+
+    def test_public_file_manifest_is_complete_and_private_inputs_are_absent(self):
+        manifest = ROOT / "PUBLIC_FILES.txt"
+        self.assertTrue(manifest.is_file())
+        paths = [line.strip() for line in manifest.read_text().splitlines()
+                 if line.strip() and not line.lstrip().startswith("#")]
+        self.assertEqual(len(paths), len(set(paths)))
+        missing = [path for path in paths if not (ROOT / path).is_file()]
+        self.assertEqual(missing, [])
+        self.assertFalse(any(path.startswith("android/") for path in paths))
+        self.assertIn(".github/dependabot.yml", paths)
+        self.assertIn(".github/workflows/codeql.yml", paths)
+        self.assertNotIn("tests/test_android_probe_contract.py", paths)
+        self.assertIn("tests/test_io24_host_autogain.py", paths)
+        self.assertNotIn("io24_spring.py", paths)
+        self.assertFalse(any(path.startswith(("re/", "runs/", ".superpowers/"))
+                             for path in paths))
+
+    def test_github_automation_is_pinned_and_covers_supported_ecosystems(self):
+        workflows = (
+            ROOT / ".github/workflows/ci.yml",
+            ROOT / ".github/workflows/codeql.yml",
+        )
+        for workflow in workflows:
+            text = workflow.read_text()
+            with self.subTest(workflow=workflow.name):
+                self.assertIn("ubuntu-26.04", text)
+                self.assertNotIn("ubuntu-latest", text)
+                refs = re.findall(r"uses:\s*[^@\s]+@([^\s#]+)", text)
+                self.assertTrue(refs)
+                self.assertTrue(all(re.fullmatch(r"[0-9a-f]{40}", ref)
+                                    for ref in refs))
+
+        ci = workflows[0].read_text()
+        self.assertIn('python-version: "3.8"', ci)
+        self.assertIn("runner: ubuntu-24.04", ci)
+
+        codeql = workflows[1].read_text()
+        self.assertIn("language: python", codeql)
+        self.assertNotIn("java-kotlin", codeql)
+
+        dependabot = (ROOT / ".github/dependabot.yml").read_text()
+        for ecosystem in ("github-actions", "pip"):
+            self.assertIn("package-ecosystem: %s" % ecosystem, dependabot)
+        self.assertNotIn("package-ecosystem: gradle", dependabot)
 
     def test_release_metadata_targets_intended_github_repository(self):
         metadata = (ROOT / "pyproject.toml").read_text()

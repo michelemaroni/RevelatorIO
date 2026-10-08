@@ -211,11 +211,21 @@ class GtkSourceContracts(unittest.TestCase):
 
     def test_physical_main_mute_is_a_concise_display_only_state(self):
         source = Path("io24gtk.py").read_text()
-        self.assertIn("Main output: On", source)
-        self.assertIn("Main output: Muted", source)
-        self.assertIn("Follows the interface's Mute button", source)
+        self.assertIn("Interface Mute button: Off", source)
+        self.assertIn("Interface Mute button: On", source)
+        self.assertIn("Read-only state of the interface's Mute button", source)
         self.assertNotIn("Physical Main Mute (read-only)", source)
         self.assertNotIn('self._set("mainmute"', source)
+
+    def test_monitoring_separates_host_main_mute_from_headphones_mute(self):
+        source = Path("io24gtk.py").read_text()
+        master_start = source.index("    def _master_strip(")
+        master_end = source.index("    def _mixer_page(", master_start)
+        master = source[master_start:master_end]
+        self.assertIn('label="Main mute"', master)
+        self.assertIn('self._bus_mute_toggled, "main"', master)
+        self.assertIn('(\"Phones mute\", \"hpmute\")', master)
+        self.assertNotIn('(\"Output mute\", \"hpmute\")', master)
 
 
 if __name__ == "__main__":

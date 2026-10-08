@@ -8,8 +8,10 @@ behind a vendor USB protocol. This project opens those controls without
 Windows or macOS. You get a GTK4 desktop app, a command-line tool, preset and
 scene support, and detailed protocol notes if you want to dig deeper.
 
-The main interface is a native desktop app. There is no browser or phone
-controller to set up.
+The main Linux interface is a native desktop app. There is no browser service
+to set up. The independent
+[io24 Controller for Android](https://github.com/Ajuntanaga/io24-android) talks
+to the interface directly from a phone and does not depend on this Host.
 
 ## Quick start
 
@@ -62,9 +64,9 @@ day:
 | Mixer | Main, Mix A, and Mix B levels and assigns; source and output mute; bus masters; solo; monitor blend; headphones source; persistent Mirror Main |
 | Fat Channel | digital HPF, gate, Standard/Tube/FET compressors, limiter, four-band Standard EQ, Passive Program EQ, and Vintage 1970s EQ |
 | Device reverb | shared block-202 reverb, measured working with both inputs feeding it |
-| Voice FX | Transformer, Detuner, Vocoder, Ring Modulator, Filters, and Delay with the exact UC XML control order and an independent **On** state for each model. All six are verified on Input 1; models 1–5 are verified on Input 2. At 96 kHz, Delay automatically moves to the safe Host insert instead of selecting the faulty firmware model. |
-| Host effects | four-band multiband compressor, the 96 kHz Voice FX Delay fallback, and a separate spring-reverb processor returned to physical Main 1-2 on the active stereo playback pair |
-| Presets | Host snapshots, complete Host-known channel presets, UC Device Presets Store/Load flow, and front-panel preset status |
+| Voice FX | Transformer, Detuner, Vocoder, Ring Modulator, Filters, and Delay in the exact UC XML control order. Each model retains its settings, while turning one **On** turns the other five off, matching UC's single active rack. All six are verified on Input 1; models 1–5 are verified on Input 2. Above 48 kHz, Delay automatically moves to the safe Host insert instead of selecting the unaccepted high-rate firmware model. |
+| Host effects | four-band multiband compressor and the safe high-rate Voice FX Delay fallback |
+| Presets | channel presets, full Host setup files, automatic recovery, exact front-panel block writes, and the UC Device Presets library flow |
 | Scenes | import and export using Universal Control's `.scene` vocabulary, with validation and rollback reporting |
 | Device settings | 44.1/48/88.2/96 kHz, buffer size, output delay, preset-button mode, Channel Mute Sync, and component names stored by the Host |
 | Metering | both inputs, Main, Mix A, Mix B, and gain reduction |
@@ -98,28 +100,37 @@ the remaining exception: it stayed dry under three independently ordered
 transactions even though the same Input-2 rig detected the other models and a
 shared-reverb control. That is a model-0 issue, not a general Channel-2 failure.
 
-Each model component keeps its own stored **On** value. This is how the UC
-component XML is structured; it is not a single master switch painted six
-different ways. The device still holds one selected model at a time, so the six
-buttons do not represent six simultaneous processors.
+Each model component has its own stored `on` field in UC's XML, but UC presents
+one active rack. The Host now follows both facts: every model keeps its own
+parameter values, and turning one model **On** clears the other five `on`
+fields. All six models can therefore remember their knob positions without
+pretending that six processors run at once.
 
 Voice FX is separate from the shared Reverb section. Voice FX edits do not
 open or change the block-202 reverb return.
 
-The io24's hardware Delay is never selected at 96 kHz. Selecting firmware
-model 5 at that rate caused the unit to reset into its bootloader. The desktop
-Host now keeps the same On, Time, Feedback, and WetDry controls working at
-96 kHz through a bounded PipeWire insert on the selected input. Before an
-upward clock change it requests model 0 at the old rate, waits beyond the
+The io24's hardware Delay is never selected above 48 kHz. Selecting firmware
+model 5 at 96 kHz caused the unit to reset into its bootloader; 88.2 kHz has
+the same expanded private histories and no physical Delay acceptance, so it is
+kept on the safe side of the same boundary. The desktop Host keeps the same
+On, Time, Feedback, and WetDry controls working at 88.2 and 96 kHz through a
+bounded PipeWire insert on the selected input. Before an upward clock change
+it requests model 0 at the old rate, waits beyond the
 firmware's 40 ms bypass transition, replays the selector so the firmware stores
 the Transformer delegate, sends Transformer Off, and waits two complete
 old-rate audio quanta before it changes the rate. The USB reply is not treated
 as an audio-frame fence. Preset loads, scene loads, and reconnect replay adopt
 Delay on this same Host path. If the interface is absent, a saved or newly
-selected 96 kHz clock is staged at 48 kHz and completed only after attach and
+selected high-rate clock is staged at 48 kHz and completed only after attach and
 the same preflight.
 Moving back to a lower rate keeps the Host insert active until the lower
 hardware clock is actually observed.
+
+The high-rate insert changes monitoring in the same way as Multiband: the
+selected input's direct bus feed is replaced by a computer round trip on USB
+playback 1-2, PipeWire is held at a 128-frame buffer while it runs, and the
+return shares the USB playback 1-2 fader with desktop audio. This adds computer
+latency; turn Delay off to return to direct monitoring.
 
 An online "48 kHz first" workaround is not enabled automatically. Static
 firmware tracing shows that the later 96 kHz setup still reconfigures Delay and
@@ -134,13 +145,25 @@ than relying on an unproved initialization trick.
 
 ## Presets and scenes
 
-There are three different save paths, and the Host keeps them separate.
+Four names appear in the app because they save different scopes:
 
-### Host snapshots
+- A **channel preset** is one input sound: Fat Channel plus the selected Voice
+  FX. It can live on the computer, in a six-per-input Device Presets library
+  destination, or in one of the io24's two front-panel blocks per input.
+- A **UC scene** is a portable whole-device and mixer setup in Universal
+  Control's `.scene` vocabulary.
+- A **full Host setup** is the whole state this Linux Host can restore,
+  including Linux-only Multiband and the high-rate Delay fallback.
+- **Automatic recovery** is the unnamed last session. It is maintained by the
+  Host and is not another preset file the user has to manage.
 
-**Save snapshot** stores the write-only state that the Host last sent, plus
-Host-only features such as Multiband and Spring. Loading a snapshot restores
-that state and brings the controls back into line with it.
+### Full Host setups
+
+**Save full Host setup** stores the write-only state that the Host last sent,
+plus Host-only features such as Multiband and the safe Delay fallback. Loading
+a setup restores that state and brings the controls back into line with it. Older files and the
+internal APIs may still use the word `snapshot`; the front-facing app now uses
+the clearer name.
 
 The device cannot read its DSP blocks back, so `~/.cache/io24/shadow.json` is a
 record of the last successful Host writes, not proof of current hardware state.
@@ -171,27 +194,32 @@ captured before the load. The report says whether that rollback was complete or
 partial.
 
 The command-line loader requires the io24's current sample rate instead of
-assuming one. The desktop Host supplies it automatically and restores a
-96 kHz Delay scene through its Host insert. The standalone `io24-scene` loader
-has no audio insert of its own, so its direct hardware apply still rejects
-Delay at 96 kHz.
+assuming one. The desktop Host supplies it automatically and restores an
+88.2/96 kHz Delay scene through its Host insert. The standalone `io24-scene`
+loader has no audio insert of its own, so its direct hardware apply rejects
+Delay above 48 kHz.
 
-At 96 kHz the last-session file stores the exact Delay controls and owning
+At 88.2/96 kHz the last-session file stores the exact Delay controls and owning
 input as a Host-only feature, because writing those edits into the device
 shadow would select the unsafe model. Scene export lets that Host state replace
-any stale device-shadow copy. A 96 kHz restore validates the Delay component
-but emits no hardware model-5 transaction.
+any stale device-shadow copy. A high-rate restore validates the Delay
+component but emits no hardware model-5 transaction.
 
-Some UC fields have no proven io24 command: mono-source pan, stereo width,
-independent `FXA` sends, `dawpostdsp`, and output mono fold-down. The importer
-reports those fields instead of quietly mapping them to a different control.
+UC scenes also contain generic mixer fields the io24 fixes in hardware. A
+centred mono `pan`, disabled independent `FXA` send, post-DSP DAW tap, and
+stereo output are accepted as already satisfied. A scene asking for any other
+value is reported explicitly; the Host never maps it to an unrelated control.
+Stereo width still has no proven io24 command.
 
 ### Device Presets and the front-panel buttons
 
-Universal Control uses `MemP/PrsM` for its twelve Device Presets destinations:
-six for Input 1 and six for Input 2. **Send to Device Presets** follows that
-route and keeps an identity-bound receipt in
-`$XDG_STATE_HOME/io24/device-presets.json`.
+Every channel-preset menu now has **Save to device…**. The confirmation first
+asks for Input 1 or Input 2, then for an exact destination. **Preset-button
+block 1/2** writes `MemP/Stat` index 0–3. **Device library slot 1–6** writes
+Universal Control's separate `MemP/PrsM` collection: indexes 16–21 for Input 1
+and 22–27 for Input 2. Library sends keep an identity-bound receipt in
+`$XDG_STATE_HOME/io24/device-presets.json`; block sends use the corresponding
+device-block registry.
 
 The interface cannot return the stored body. A successful send is therefore
 reported as `WRITE_SENT_UNVERIFIED`. It is not claimed as cold-boot persistence
@@ -199,9 +227,10 @@ or standalone Voice FX proof. **Load** replays the retained record through the
 normal Fat Channel and Voice FX setters, which matches UC's RestorePreset
 behavior.
 
-The four front-panel button records use a different `MemP/Stat` path. The Host
-can follow their selection, but it does not pretend that a Device Presets entry
-has been assigned to one of those buttons.
+The chosen front-panel block must be inactive while it is replaced. The Host
+will ask you to choose the other block if that destination is currently
+playing. A library entry is not silently assigned to a front-panel button;
+these remain two different storage collections.
 
 Fat Channel state has been confirmed audible without the Host after device
 recall. Voice FX still needs the Host transaction, so keep the Host open when
@@ -246,8 +275,11 @@ io24 delay off
 Run `io24 --help` for the complete command list.
 
 The device supports 44.1, 48, 88.2, and 96 kHz. PipeWire often ships with only
-48 kHz enabled. The [user guide](GUIDE.md) explains how to allow all four rates
-and how the Host remembers the last successful rate and buffer size.
+48 kHz enabled. A fresh Host starts at the safe native 48 kHz rate; after the
+user chooses another rate it remembers that successful selection. The selector
+sets PipeWire's graph-wide clock, so it can affect other audio devices too. The
+[user guide](GUIDE.md) explains how the Host selects, observes, and remembers
+the last successful rate and buffer size.
 
 ## Keeping settings after reconnect
 
@@ -276,9 +308,10 @@ them.
 - Voice FX is confirmed on Input 1. Input 2 is confirmed for models 1–5;
   Transformer/Doubler remains the isolated model-0 exception.
 - Passive and Vintage EQ use exact UC 4.7.2 designers and packet routes. Their
-  dedicated audible A/B check is still pending.
-- The Host spring reverb is covered by offline DSP and routing tests. Its final
-  physical Main-output acceptance run is still pending.
+  dedicated audible A/B check is still pending. Their editable rack panels use
+  original project artwork documented in
+  [`docs/design`](docs/design/README.md), with every knob and graph driven by
+  the exact decoded controls.
 - The compressor knee interpretation remains inferred.
 
 These limits are tracked in [PROTOCOL.md](PROTOCOL.md). That file preserves old
@@ -295,13 +328,15 @@ older section disagrees.
 | `io24_dsp.py` | gate, compressor, limiter, and filter coefficient builders |
 | `io24_mixer.py` | mixer taper, balance law, and mixer packets |
 | `io24_mbc.py` | Host multiband insert |
-| `io24_spring.py` | Host spring processor and PipeWire route control |
 | `io24_scene.py` | Universal Control scene import/export |
 | `io24d.py` | local JSON-lines daemon for custom clients |
 | `ucnet_shim.py` | UCNET compatibility layer |
 | `PROTOCOL.md` | reverse-engineering record and evidence boundaries |
 | `GUIDE.md` | detailed user guide |
 | `PUBLICATION.md` | public-source and release boundary |
+
+The Android controller has its own source, build, and release history in
+[`Ajuntanaga/io24-android`](https://github.com/Ajuntanaga/io24-android).
 
 ## Thanks and prior work
 
@@ -349,11 +384,16 @@ seriously. If the interface identifies itself as `Revelator IO 24 BOOTLOADER`,
 unplug it at the device end, wait about 15 seconds, and reconnect it.
 
 Selecting Voice FX Delay at 96 kHz also produced an immediate bootloader
-disconnect on firmware 0128. The Host never sends that model selection at
-96 kHz. It preflights upward clock changes and runs Delay on the computer with
+disconnect on firmware 0128. The Host never sends that model selection above
+48 kHz. It preflights upward clock changes and runs Delay on the computer with
 the same four controls instead. Native 48 kHz timing and audio were physically
-verified; the new 96 kHz Host path is covered by deterministic DSP and routing
+verified; the 88.2/96 kHz Host path is covered by deterministic DSP and routing
 tests and still needs a separately authorized live listening pass.
+
+That protection covers sample-rate changes made through the Host. Another
+program can ask PipeWire or ALSA to change the clock without going through the
+Host's preflight. Turn Voice FX Delay off before making a direct external clock
+change, then let the Host observe the new rate before turning it back on.
 
 The DFU interface reports `Upload Unsupported`, so the device cannot provide a
 recovery image before a write. No custom firmware image is included here.
@@ -366,8 +406,9 @@ GPL-3.0-or-later. See [LICENSE](LICENSE).
 Vendor installers, DLLs, firmware, extracted factory preset bodies, decompiler
 output, local captures, personal paths, device serials, VMs, and agent work
 records are not part of the public repository or Python wheel. Optional factory
-data and exact alternate-EQ coefficients must be recovered from your own lawful
-Universal Control copy. The Host remains useful without that optional catalog.
+data and exact alternate-EQ coefficients must be recovered from your own local
+Universal Control installation. The Host remains useful without that optional
+catalog.
 
 [PUBLICATION.md](PUBLICATION.md) records the complete clean-source boundary and
 the release checks used before publishing.

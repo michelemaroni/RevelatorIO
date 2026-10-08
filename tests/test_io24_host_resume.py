@@ -99,7 +99,8 @@ class LastSessionFileTests(unittest.TestCase):
                      "_save_last_session")
 
     def test_the_session_round_trips(self):
-        features = {"reverb_character": {"version": 1, "type": 2}}
+        features = {"reverb_movement": {"version": 1, "enabled": True,
+                                        "depth": 0.08}}
         self.assertTrue(self._host(features)._save_last_session(self.path))
         self.assertEqual(io24gtk.load_last_session(self.path),
                          {"version": 1, "host_features": features})
@@ -114,10 +115,10 @@ class LastSessionFileTests(unittest.TestCase):
         self.path.write_text("{bad")
         self.assertIsNone(io24gtk.load_last_session(self.path))
 
-    def test_host_features_gather_multiband_and_reverb_character(self):
+    def test_host_features_gather_multiband_and_reverb_movement(self):
         host = _bind(SimpleNamespace(
             _insert_state=lambda: {"version": 1},
-            _reverb_character_state=lambda: None), "_host_features_state")
+            _reverb_movement_state=lambda: None), "_host_features_state")
         self.assertEqual(host._host_features_state(),
                          {"multiband_insert": {"version": 1}})
 
@@ -189,10 +190,10 @@ class LastSessionFileTests(unittest.TestCase):
 
 
 class AudioClockPreferenceTests(unittest.TestCase):
-    def test_first_launch_defaults_to_96khz_and_512_frames(self):
+    def test_first_launch_defaults_to_safe_48khz_and_512_frames(self):
         self.assertEqual(io24gtk.audio_clock_preference(None), {
             "version": 1,
-            "sample_rate": 96000,
+            "sample_rate": 48000,
             "quantum": 512,
         })
 
@@ -233,10 +234,10 @@ class AudioClockPreferenceTests(unittest.TestCase):
             "_audio_clock_state")
         self.assertEqual(host._audio_clock_state()["quantum"], 512)
 
-    def test_startup_applies_the_saved_rate_and_standard_quantum(self):
+    def test_startup_applies_a_saved_native_delay_safe_rate_and_quantum(self):
         calls = []
         host = _bind(SimpleNamespace(
-            _selected_rate=88200,
+            _selected_rate=44100,
             _selected_quantum=512,
             _insert_quantum_before=None,
             _set_device_fs=lambda rate: calls.append(("device-fs", rate)),
@@ -255,8 +256,8 @@ class AudioClockPreferenceTests(unittest.TestCase):
             self.assertFalse(host._restore_audio_clock())
 
         self.assertEqual(calls, [
-            ("clock.force-rate", 88200),
-            ("device-fs", 88200),
+            ("clock.force-rate", 44100),
+            ("device-fs", 44100),
             ("clock.force-quantum", 512),
         ])
 
@@ -277,6 +278,35 @@ class AudioClockPreferenceTests(unittest.TestCase):
         settings = {
             "clock.allowed-rates": "[ 44100, 48000, 88200, 96000 ]",
             "clock.force-rate": "96000",
+            "clock.force-quantum": "512",
+        }
+        with mock.patch.object(io24gtk, "pw_settings", return_value=settings), \
+                mock.patch.object(
+                    io24gtk, "pw_set",
+                    side_effect=lambda key, value:
+                    (calls.append((key, value)) or (True, ""))):
+            self.assertFalse(host._restore_audio_clock())
+
+        self.assertEqual(calls, [("clock.force-rate", 48000)])
+        self.assertTrue(host._audio_clock_restore_deferred)
+
+    def test_offline_882khz_startup_is_also_held_until_attach(self):
+        calls = []
+        host = _bind(SimpleNamespace(
+            _selected_rate=88200,
+            _selected_quantum=512,
+            _insert_quantum_before=None,
+            _audio_clock_restore_deferred=False,
+            _audio_clock_restore_inflight=False,
+            ctl=SimpleNamespace(dev=None),
+            _set_device_fs=lambda rate: calls.append(("device-fs", rate)),
+            say=lambda message: calls.append(("message", message))),
+            "_audio_clock_state", "_safe_delay_transition_rate",
+            "_apply_saved_quantum", "_apply_saved_audio_clock",
+            "_restore_audio_clock")
+        settings = {
+            "clock.allowed-rates": "[ 44100, 48000, 88200, 96000 ]",
+            "clock.force-rate": "88200",
             "clock.force-quantum": "512",
         }
         with mock.patch.object(io24gtk, "pw_settings", return_value=settings), \
@@ -383,6 +413,7 @@ class ResumeTriggerTests(unittest.TestCase):
     def _host(self):
         calls, self.restarts = [], []
         host = SimpleNamespace(
+            _fs_seen=True,
             _resume_session=lambda first: calls.append(first),
             _insert_reconcile=lambda restart=False: self.restarts.append(
                 restart))
@@ -421,6 +452,27 @@ class ResumeTriggerTests(unittest.TestCase):
 
         self.assertEqual(calls, ["clock"])
         self.assertFalse(hasattr(host, "_resumed_generation"))
+
+    def test_first_resume_observes_the_live_clock_before_replaying_coefficients(self):
+        calls = []
+        host = SimpleNamespace(
+            _fs_seen=False,
+            _resume_session=lambda first: calls.append(("resume", first)),
+            _insert_reconcile=lambda restart=False: None,
+        )
+
+        def refresh():
+            calls.append("clock")
+            host._fs = 48000.0
+            host._fs_seen = True
+
+        host._refresh_device_page = refresh
+        host = _bind(host, "_maybe_resume")
+
+        host._maybe_resume({"alive": True, "attach_generation": 1})
+
+        self.assertEqual(calls, ["clock", ("resume", True)])
+        self.assertEqual(host._fs, 48000.0)
 
     def test_the_tick_resumes_only_after_its_alive_gate(self):
         tick = _function("_tick")
@@ -465,7 +517,8 @@ class ResumeSessionTests(unittest.TestCase):
         self.path = Path(directory.name) / "last-session.json"
         self.path.write_text(json.dumps({
             "version": 1,
-            "host_features": {"reverb_character": {"version": 1}}}))
+            "host_features": {"reverb_movement": {
+                "version": 1, "enabled": False, "depth": 0.08}}}))
 
     def _host(self, shadow, preset_slot=(0, 2)):
         backend = _Backend(shadow)
@@ -474,7 +527,7 @@ class ResumeSessionTests(unittest.TestCase):
             ctl=SimpleNamespace(snap={"preset_slot": list(preset_slot)},
                                 submit=lambda work: work(backend)),
             _after_load=lambda mirror, features, migrations, message:
-            adopted.append((mirror, features, message)),
+            adopted.append((mirror, features, migrations, message)),
             say=lambda _message: None)
         return _bind(host, "_resume_session"), backend, adopted
 
@@ -484,7 +537,43 @@ class ResumeSessionTests(unittest.TestCase):
         self.assertEqual(backend.calls, [
             ("reapply", io24gtk.RESUME_SKIP, io24gtk.DEFAULT_SAMPLE_RATE),
         ])
-        self.assertEqual(adopted[0][1], {"reverb_character": {"version": 1}})
+        self.assertEqual(adopted[0][1], {"reverb_movement": {
+            "version": 1, "enabled": False, "depth": 0.08}})
+
+    def test_first_resume_migrates_legacy_character_to_movement(self):
+        self.path.write_text(json.dumps({
+            "version": 1,
+            "host_features": {"reverb_character": {
+                "version": 1, "type": 4, "movement": True,
+                "movement_depth": 0.12,
+            }},
+        }))
+        host, _backend, adopted = self._host({})
+
+        host._resume_session(first=True, path=self.path)
+
+        self.assertEqual(adopted[0][1], {"reverb_movement": {
+            "version": 1, "enabled": True, "depth": 0.12}})
+        self.assertEqual(adopted[0][2], [
+            "legacy reverb Character was removed; Movement was retained",
+        ])
+
+    def test_first_resume_restores_the_safe_host_delay_feature(self):
+        feature = {
+            "version": 1, "target": 2,
+            "state": {"on": True, "time_s": 0.173,
+                      "feedback": 0.25, "mix": 0.8},
+        }
+        self.path.write_text(json.dumps({
+            "version": 1,
+            "host_features": {"voicefx_delay": feature},
+        }))
+        host, _backend, adopted = self._host({})
+
+        host._resume_session(first=True, path=self.path)
+
+        self.assertEqual(adopted[0][1], {"voicefx_delay": feature})
+        self.assertEqual(adopted[0][2], [])
 
     def test_a_reconnect_restores_the_unit_but_not_host_features(self):
         host, _backend, adopted = self._host({})
@@ -520,7 +609,7 @@ class AutoGainSessionTests(unittest.TestCase):
     def _gathering_host(self, autogain_on):
         return _bind(SimpleNamespace(
             _insert_state=lambda: None,
-            _reverb_character_state=lambda: None,
+            _reverb_movement_state=lambda: None,
             _autogain_on=autogain_on), "_host_features_state")
 
     def _adopting_host(self):

@@ -2,10 +2,9 @@
 """Run UC 4.7.2's own Vintage EQ designer for the Linux Host.
 
 PROTOCOL.md §12N recorded the Vintage model as a Neve 1073 whose switch
-frequencies were "not recovered", and the Host has been applying 1073 values as
-a labelled guess. The switch table is now read out of the binary
-(`runs/20260914T031459-0700-native-slot-builder/VINTAGE-EQ-TABLE.md`), and the
-designer with it:
+frequencies were "not recovered", and the Host had been applying 1073 values as
+a labelled guess. The retained investigation recovered the switch table and
+the designer with it:
 
     0x18001c140   the recompute; loads the frequency index and calls
     0x18001d470   the band designer            <- what this module executes
@@ -29,6 +28,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import struct
 import sys
 from pathlib import Path
@@ -446,10 +446,10 @@ class Machine:
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_DLL = (
-    ".superpowers/sdd/2026-08-28-cp34-preset-effect-control/runs/"
-    "20260906T001130-0700-uc472-official-reacquisition/extracted/"
-    "hwaccess/dspusbdevice.dll")
+DEFAULT_DLL = Path(os.environ.get(
+    "IO24_UC472_DSPUSBDEVICE",
+    Path.home() / ".cache" / "io24" / "re" / "dspusbdevice.dll",
+))
 BUFFER = 0x10000000
 
 

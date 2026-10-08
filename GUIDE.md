@@ -30,29 +30,36 @@ Against UC 4.7.2, nothing is missing from the ordinary level-routing job:
 source faders, Main/Mix A/Mix B sends and assigns, source mute, per-bus solo,
 bus mute/master, phones source, blend, stereo link and the FX return all have
 Linux controls. The complete send matrix lives on **Routing** instead of UC's
-bus-selected Mixer view. The remaining UC fields have no faithful proven io24
-representation: mono-source `pan`, `stereopan` width/mono collapse, per-input
-`FXA`, `dawpostdsp`, output mono, and a writable physical Main-mute latch.
+bus-selected Mixer view. UC scenes contain several generic fields whose
+ordinary io24 state is fixed: mono inputs are centred, the independent `FXA`
+send is off, DAW capture is post-DSP, and output is stereo. Those values load
+without a false warning; non-default requests remain explicit omissions.
+`stereopan` width/mono collapse and a writable physical Main-mute latch have no
+proven command.
 Channel/mix names are durable Host metadata. **Mirror Main** is a persistent
 Host latch: Main edits continue into that aux, and clearing it restores the
 aux's retained mix. The physical Main-mute button is mirrored read-only, just as
-UC exposes `hardwareMute` display-only. **Output mute** is the separate
-writable software control.
+UC exposes `hardwareMute` display-only. **Main mute** is the separate writable
+Host bus mute. **Phones mute** controls the headphone output and is no longer
+mislabelled as a generic output mute.
 
 **Blend** sets playback against direct monitoring. Centre is an even mix.
 
-**Auto** (under each input's fader) is automatic preamp gain, as in Universal
-Control: switch it on and the Host keeps that input's typical loud level (the
-95th percentile of its meter over the last few seconds) near −12 dBFS by
-itself, with nothing to confirm. It corrects only when the level drifts more
-than 3 dB, at most once a second, rising up to 2 dB and falling up to 4 dB per
-step; a reading at clip drops the gain 6 dB at once. It never raises the gain on
-silence or a steady noise floor, only on the rise and fall of real playing or
-speech. The gain fader is locked while it is on. With stereo link on the two
-switches move together and both inputs get the gain the louder one needs. The
-firmware has nothing behind UC's own switch, so this runs in the Host: it works
-only while the Host is open. The Host remembers which inputs had it on and
-switches them back on the next time it opens.
+**Auto** (under each input's fader) is a Linux Host preamp helper. It is not an
+active UC 4.7.2 control: that skin comments its Auto button out, and the two
+firmware parameters behind the old name are inert. The Host instead measures
+about a three-second window and keeps its 95th-percentile loud level near −12
+dBFS. An ordinary analog gain move waits for a gap at least 10 dB below that
+loud level, so it does not step the preamp in the middle of a word or note. A
+recent peak also blocks an upward move that would leave less than 3 dB of
+headroom. Corrections happen only outside a 4 dB deadband and are bounded to
++6 dB upward or −9 dB downward; sustained clipping can make one larger −12 dB
+safety correction. Each change clears the measurement window, so it cannot
+chase the next phrase a second later. It never raises silence or a steady noise
+floor. The gain fader is locked while Auto is on. With stereo link on, both
+inputs follow the louder one, and an ordinary move waits until both non-silent
+inputs are between phrases. This works only while the Host is open, and the
+Host remembers which inputs had it on.
 
 Double-click any fader or knob to return it to its default.
 
@@ -75,14 +82,14 @@ switch. Low and High also have the exact UC shelf switch; switching it off uses
 parametric mode. The two middle bands are always parametric. There is no hidden
 shape menu. All four bands use 36 Hz–18 kHz, ±15 dB and Q 0.1–10 (default 0.6),
 matching UC 4.7.2's embedded `Eqxt4` model. Drag a node for frequency/gain and
-scroll over it for Q. Global and per-band bypass states survive Host snapshots
+scroll over it for Q. Global and per-band bypass states survive full Host setups
 and reconnects independently.
 
 **Limiter**: threshold plus **release**, 50 ms to 1.5 s. The device has always
 taken a release coefficient and the driver has always computed it exactly; the
 page simply never offered the control, so every limiter write before this used
 the 0.4 s default. UC keeps no release field in its preset record, so release
-is live Host state. It rides a Host snapshot, not a device slot body.
+is live Host state. It rides a full Host setup, not a device slot body.
 
 **Passive and Vintage EQ:** choose the model in **EQ model**. Each model has its
 own editable UC controls and its own global **EQ** power state. Passive exposes
@@ -92,13 +99,23 @@ Vintage exposes Low, Low-Mid, Hi-Mid and High gain; its first three bands have
 the exact 35/60/110/220 Hz, 360/700/1600 Hz and 3.2/4.8/7.2 kHz switches. These
 models have no per-band power switches in UC's component model.
 
+Both models use their own interactive rack face rather than a generic slider
+list. Drag a knob vertically, scroll over it, or focus the panel and use left
+and right to choose a knob and up and down to change it. The inset response
+display is calculated from the same coefficients sent by the Host. The rack
+lamp follows the selected EQ model's independent power switch. Original design
+references are kept in [`docs/design`](docs/design/README.md).
+
 The response graph and device packets are generated by UC 4.7.2's exact
 designers, read from the separately retained, hash-pinned
 `dspusbdevice.dll` as data. The Host does not load that DLL or substitute
 generic shelves. If the local artifact is absent, enabling or editing one of
-these models stops before a device write and explains what is missing. Host
-snapshots, reconnect replay and user presets retain the selected model and all
-of its semantic controls independently for each input.
+these models stops before a device write and explains what is missing.
+Place the DLL from your local UC 4.7.2 installation at
+`~/.cache/io24/re/dspusbdevice.dll`, or point
+`IO24_UC472_DSPUSBDEVICE` at it. Full Host setups, reconnect replay, and user
+presets retain the selected model and all of its semantic controls independently
+for each input.
 
 **High-pass filters**: the Mixer strip's **HPF** is the unit's
 fixed preamp switch. The Fat Channel's digital HPF is separate: choose Off,
@@ -156,7 +173,11 @@ character does not discard the other two models' settings. Then:
   Main, Mix A and Mix B wherever it was, and turns USB playback 1-2 on there
   if it was off. The input's fader keeps its position and comes back when
   Multiband is off. USB playback 1-2 also carries the computer's own audio, so
-  that one fader sets both.
+  that one fader sets both. The Host now confirms this playback return is
+  audible before rerouting the input. If the io24 PipeWire sink was muted, it
+  is opened only while the insert runs and its prior mute is restored after
+  the direct input feed is back. Its volume is never changed. A zero-volume or
+  unresponsive return is rejected with the direct feed left in place.
 - **Buffer.** Monitoring now goes to the computer and back, so while Multiband
   runs the Host holds PipeWire's buffer at 128 frames (about 2.7 ms a period
   at 48 kHz) unless it is already smaller, and puts back what it was
@@ -199,64 +220,29 @@ only bypass versus nonzero.
 Turning the shared reverb switch on re-sends Channel 1's processing as set on
 the Device page. A bypassed channel stays bypassed. It also sends the Main-return level
 displayed beside the switch, and assigns that return to Main. Moving
-reverb-character controls updates only the engine. Turning the switch off
+the reverb controls updates only the engine. Turning the switch off
 disables only the shared engine, preserving the displayed path for the next use.
 
-**Character** presets position the one algorithm the device has. They are not
-separate reverb engines, and saying so would be a lie about the hardware:
+The device has one reverb algorithm, so the Host presents its real controls
+directly: **Room size**, **Pre-delay**, **Input high-pass**, and **Reverb return
+blend**. The retired Character menu only moved those same controls to named
+positions and did not produce convincingly different reverb types.
 
-| | size | input high-pass | pre-delay |
-|---|---|---|---|
-| Room | 0.28 | 220 Hz | 8 ms |
-| Plate | 0.52 | 320 Hz | 14 ms |
-| Spring | 0.34 | 480 Hz | 4 ms |
-| Hall | 0.72 | 160 Hz | 32 ms |
-| Cathedral | 0.94 | 110 Hz | 70 ms |
+**Reverb return blend** is the engine's own dry/wet value and starts at 100 %.
+The reverb is a send effect: the FX return carries what comes back from the
+engine, so any dry share doubles the input that is already in the bus. The UC
+scenes recovered from this unit all keep it fully wet. Set how much reverb you
+hear with the FX return level, not with this control.
 
-Moving any slider by hand drops the character back to Custom, so the label never
-claims a preset that is no longer loaded.
-
-**Wet mix** is the engine's own dry/wet, and it starts at 100 %. The reverb is a
-send effect: the FX return carries what comes back from the engine, so any dry
-share doubles the input that is already in the bus. Every character sets it to
-100 %, which is where each Universal Control scene recovered from this unit
-keeps it. Set how much reverb you hear with the FX return level, not with this.
-
-**Movement** is genuine host-side augmentation rather than a preset: the host
-drifts room size on a slow sine (about a 14-second period). The device's tail is
-otherwise perfectly static, which is most of what makes a digital reverb sound
-synthetic. Switching it off restores the size you set.
+**Size movement** is genuine host-side augmentation: the Host drifts Room size
+on a slow sine (about a 14-second period). **Movement depth** shows the exact
+range as ± percent around the displayed Room size. Switching movement off
+restores that centre value. A manual Room-size change becomes the new centre.
+Movement pauses while reverb is off, updates at four bounded writes per second,
+and does not replace the saved centre with a passing modulation value.
 
 **Pre-delay** is the gap between the dry sound and the first reflection. In a
 real room, the time sound takes to reach a surface and come back.
-
-### Host spring reverb
-
-This is a second, genuinely different reverb rather than another position on
-the device algorithm. A bundled realtime LADSPA processor uses dispersive
-all-pass stages and two decorrelated banks of damped resonators: **Dwell** sets
-feedback/tail length, **Tone** sets spring loss, **Drip** sets transient splash,
-and **Width** blends the two tank paths from mono to stereo. It outputs wet
-signal only, so the ordinary direct input remains the dry path.
-
-Inputs 1 and 2 are captured after their Fat Channels. The wet pair always
-returns to **physical Main 1-2**. The Host uses USB playback 5-6 when the active
-PipeWire profile exposes it, USB 3-4 when that is the best spare pair, and the
-normal USB 1-2 Main pair on stereo or 2.1 profiles. A dedicated pair is kept off
-Mix A and Mix B while Spring is on, then restored exactly when Spring stops. On
-USB 1-2, PipeWire mixes the wet stream into the existing Main playback path and
-the Host leaves every device mixer assignment alone. It never falls back to a
-different sound device.
-
-Disconnect any Main-output-to-input loopback cable left from a test campaign
-before enabling the spring. That cable makes the returned wet signal feed its
-own input and can create loud feedback.
-
-The spring is Host-only. It is saved in Host snapshots and the last session,
-but it cannot be put in a device-resident slot or exported as a UC scene effect.
-The bundled processor, impulse tail, stereo width, package contents and route
-restore behavior are verified without hardware. A live Main-output acceptance
-run is a separate hardware check.
 
 ### Voice FX
 
@@ -272,8 +258,9 @@ component, or double-click it to toggle that component's own **On** field. The
 separate **Model** row provides the same selector for keyboard and screen-reader
 use. Each model page has its own **On** switch because `On` belongs to that
 component in Universal Control's XML. There is no master enable above the six
-models. These are independent stored controls, not six simultaneous processors;
-the device still runs one selected model at a time.
+models. Universal Control still normalizes this as one active rack: turning a
+model on turns the other five off while leaving all of their knob settings
+ready for later. The device runs one selected model at a time.
 
 The private core is not the shared Reverb section above and does not use block
 202. UC's captured VoiceFX transaction also does not open or change the reverb
@@ -299,9 +286,10 @@ separate master enable or hidden activation tag. Selecting Delay sends
 `VoFx + two Bqdf + two MBdf + godv`; later On/Off, Width and WetDry changes send
 only `godv`. The Host now follows those rules and adds no artificial delay.
 
-The hardware Delay is never selected while the interface is at 96 kHz.
-Selecting it at that rate caused the unit to disconnect and reappear as its
-bootloader on 2026-09-21. In the desktop Host, the Delay rack keeps working:
+The hardware Delay is never selected above 48 kHz. Selecting it at 96 kHz
+caused the unit to disconnect and reappear as its bootloader on 2026-09-21;
+88.2 kHz is conservatively blocked because it has no physical Delay acceptance.
+In the desktop Host, the Delay rack keeps working:
 On, Time, Feedback and WetDry drive a sample-rate-safe PipeWire processor on
 the selected input. An upward rate change performs the firmware's deferred
 replacement at the old rate: request Transformer, wait 60 ms, replay that
@@ -310,14 +298,21 @@ only then let PipeWire move the clock. That final wait scales with the active
 buffer and avoids treating a transport reply as an audio-frame fence. Presets,
 scenes and reconnect restore use the same Host path. The standalone
 `io24-scene` command has no such audio insert, so a direct
-96 kHz hardware load remains blocked. Native repeat timing was
-physically verified at 48 kHz; the Host 96 kHz path has deterministic DSP and
-routing coverage pending a separately authorized listening pass.
+high-rate hardware load remains blocked. Native repeat timing was
+physically verified at 48 kHz; the Host 88.2/96 kHz path has deterministic DSP
+and routing coverage pending a separately authorized listening pass.
 
-When the io24 is disconnected, selecting or restoring 96 kHz holds PipeWire
-at 48 kHz. The Host completes the requested change only after the interface
+That Host path uses the same monitoring insertion as Multiband. It removes the
+selected input's direct Main/Mix A/Mix B feed, returns the processed signal on
+USB playback 1-2, and temporarily holds PipeWire at 128 frames. Monitoring now
+makes a computer round trip, and the return shares the USB playback 1-2 fader
+with desktop audio. Turning Delay off restores the direct feed.
+
+When the io24 is disconnected, selecting or restoring 88.2/96 kHz holds
+PipeWire at 48 kHz. The Host completes the requested change only after the interface
 attaches, the live old rate and ALSA period are known, and the same safety
-preflight succeeds. The saved preference remains 96 kHz during that staging.
+preflight succeeds. The requested high-rate preference remains selected during
+that staging.
 
 The earlier Linux listening campaign used the superseded transaction: it
 reselected on every edit, omitted both Transformer `MBdf` tables, inserted
@@ -391,7 +386,7 @@ displayed 0 dB send.
 back at exactly their previous levels when the solo is released. Several
 sources can be soloed in a bus at once, and each bus has its own solo. The
 hardware has no solo, so the Host writes the others off without touching their
-faders or assigns. Solo is never saved in a snapshot, and the Host releases any
+faders or assigns. Solo is never saved in a full Host setup, and the Host releases any
 active solo when it closes. A route the Host had never set is given the 0 dB it
 displays the first time its bus is soloed, so releasing has a real level to
 return to.
@@ -444,9 +439,11 @@ only Inputs 1 and 2, which every profile with a stereo pair carries.
 ## Device
 
 **Sample rate:** the device supports 44.1, 48, 88.2 and 96 kHz; PipeWire
-decides which is used. The Host starts at 96 kHz and a 512-frame buffer on its
-first launch, then remembers and restores the last successful selections. Two
-things to know if you check by hand: PipeWire's
+decides which is used. The Host starts at the safe native 48 kHz rate and a
+512-frame buffer on its first launch, then remembers and restores the last
+successful selections. The rate selector changes PipeWire's graph-wide clock,
+so another audio device can follow it. Two things to know if you check by hand:
+PipeWire's
 `clock.rate` is the *default* and stays at 48000 whatever the graph is doing.
 The real rate is in `/proc/asound/card*/pcm0p/sub0/hw_params`, and a forced rate
 only takes effect once something is playing, because a suspended device has no
@@ -460,12 +457,19 @@ re-sends them and says so. Before this, nothing passed a rate at all and every
 write was built for 48 kHz. At 96 kHz a 1 kHz EQ band was landing at 2 kHz and
 a 240 ms delay was running at 120 ms.
 
-Voice FX Delay is the exception to normal device-side 96 kHz support. A model
-selection at 96 kHz reset this firmware into its bootloader, so the desktop
-Host leaves that model bypassed in the unit and runs Delay on the computer.
+Voice FX Delay is the exception to normal device-side high-rate support. A
+model selection at 96 kHz reset this firmware into its bootloader. The same
+private histories are already substantially larger at 88.2 kHz, where no
+physical Delay acceptance exists, so the desktop Host leaves that model
+bypassed in the unit above 48 kHz and runs Delay on the computer.
 The switch is automatic; the visible controls and selected input do not
 change. Moving back down keeps the safe Host path until ALSA reports the lower
 hardware clock.
+
+The preflight covers changes requested through this Host. If another program
+changes PipeWire or ALSA directly, it can bypass that ordering. Turn Delay off
+before an external clock change and wait for the Host to show the new observed
+rate before enabling it again.
 
 **Buffer** is PipeWire's quantum. Latency is quantum ÷ rate, so smaller is
 tighter but works the CPU harder and risks dropouts.
@@ -518,26 +522,34 @@ literally implements two parallel signal paths.
 **Host component names** lets you label Inputs 1/2, all three USB playback
 pairs, FX return, Mix A/B, and Main. UC keeps these `username` values in its
 component model rather than sending a label-write command to the io24, so Linux
-stores them with Host snapshots and scenes. The separate **Device-reported
+stores them with full Host setups and scenes. The separate **Device-reported
 channel names (read-only)** group shows the unit's small `CHNP` table.
 
-The Mixer page's **Physical Main Mute (read-only)** follows the front-panel
+The Monitoring strip's **Interface Mute button** status follows the front-panel
 MUTE latch. UC also exposes `hardwareMute` only as display state; neither Host
-has a writable command for that physical latch. **Output mute (software)** is
-the independently writable Main-bus mute.
+has a writable command for that physical latch. **Main mute** is the
+independently writable Host Main-bus mute. **Phones mute** is the separate
+headphone-output control.
 
 ---
 
 ## Presets
 
-The page has a **Load into** row, a search box, a **Preset name** field with
+The page has a **Preset input** row, a search box, a **Preset name** field with
 **Save**, and two drop-downs: **User Presets** and **Factory Presets**. The
 search filters both by name and description.
+
+A **channel preset** means one input sound: Fat Channel plus selected Voice FX.
+A **UC scene** means the portable whole device and mixer. A **full Host setup**
+also contains Linux-only processing such as Multiband and the safe high-rate
+Delay fallback. **Automatic recovery** is the unnamed last session maintained
+by the Host. Those scopes are shown separately so saving a vocal sound cannot
+be mistaken for saving the whole mixer.
 
 ### Loading
 
 Click the preset's **Load** button to load it into the channel chosen in
-**Load into**. Its Fat Channel goes to that channel; while the channels are
+**Preset input**. Its Fat Channel goes to that channel; while the channels are
 linked, the Fat Channel goes to both. Voice FX has one shared state, so the same
 action assigns it to the target input and sends the preset's recorded model state.
 
@@ -568,20 +580,22 @@ Then come the presets you saved on this computer.
 
 ### Saving and Device Presets
 
-Type a name and press **Save**: the **Load into** channel's current sound,
+Type a name and press **Save**: the **Preset input** channel's current sound,
 Voice FX included, joins your presets on this computer, in
 `~/.config/io24/user-presets.json` (the factory file's format). Saving over an
 existing name asks first. Voice FX is one shared settings object, so either
 channel's preset carries the current model state and assigns it to that channel
 when loaded.
 
-Choose one of six **Device Presets destinations** for the selected channel.
-Each preset's **⋯** menu offers **Send to Device Presets**. This uses UC's actual
+Each preset's **⋯** menu offers **Save to device…**. Choose Input 1 or Input 2,
+then the exact destination. **Preset-button block 1/2** writes one of the four
+front-panel `MemP/Stat` bodies. **Device library slot 1–6** uses UC's separate
 `MemP/PrsM` Store route: indexes 16–21 belong to Input 1 and 22–27 to Input 2.
-It is separate from the four front-panel button blocks. The Host validates and
-sends a complete record, then retains an identity-bound receipt with status
-`WRITE_SENT_UNVERIFIED`. The io24 cannot return that body, so the status is not
-called device readback, cold-boot persistence, or standalone VoiceFX proof.
+The Host refuses to overwrite the front-panel block currently playing. It
+validates and sends a complete record, then retains an identity-bound receipt
+with status `WRITE_SENT_UNVERIFIED`. The io24 cannot return that body, so the
+status is not called device readback, cold-boot persistence, or standalone
+VoiceFX proof.
 
 Known Device Presets appear under **User Presets**. **Load** performs UC's
 RestorePreset behavior by replaying the retained record through the normal Fat
@@ -595,7 +609,7 @@ also have **Delete**, which removes them from this computer only.
 **Save scene…** writes the readable and Host-known device state atomically with
 Universal Control's scene field names. It includes exact semantic Standard,
 Passive, and Vintage EQ state from the editor and the selected Voice FX model's
-own On value. At 96 kHz, the exact Host Delay controls and owning input replace
+own On value. Above 48 kHz, the exact Host Delay controls and owning input replace
 the intentionally stale device-shadow copy, so reloading the scene cannot
 materialize hardware model 5. It also includes every complete front-panel-block
 and Device Presets body retained for this exact unit. Unknown bodies, physical
@@ -648,50 +662,47 @@ its active block: solid with a breathing brightness (block 1 every 1.8 s, block
 2 every 0.9 s), and an outlined dot when bypassed. With reduced motion the dots
 stay steady and differ slightly in size.
 
-### Host snapshots
+### Full Host setups
 
-A snapshot also carries the Host-only half of the reverb: the named
-**character**, **movement**, and **movement depth**. The device has no
-parameter for any of them, so a save that kept only the device values came back
-with the character reset to Custom. Saved values that are unreadable, unknown,
-or out of range are refused with a completed-load notice rather than quietly
-moving a control.
+A full Host setup also carries the Host-only **Size movement** switch and
+**Movement depth**. The device has no parameter for either one. Saved values
+retain the chosen Room-size centre, not a passing modulation sample. Values
+that are unreadable, unknown, or out of range are refused with a completed-load
+notice rather than quietly moving a control.
 
-`savepreset` / `loadpreset` keep arbitrarily many settings as JSON. A preset
+The older `savepreset` / `loadpreset` command names keep full Host settings as
+JSON for compatibility. A setup
 holds the live values the device *can* report, plus this driver's mirror of the
 DSP writes it has made.
 
 Two consequences: loading a preset applies what is in it and does not reset
 settings the preset never mentioned; and the mirror is a claim about what was
 last sent, not a reading. Device preset mode, slot selection, and enable state
-are quarantined by default, so loading a Host snapshot or reapplying cached
+are quarantined by default, so loading a full Host setup or reapplying cached
 controls cannot move or disable either channel's device slot. The lower-level
 API has an explicit opt-in for workflows that intentionally include those
 selectors.
 
-GTK Host snapshots also save both inputs' Multiband settings under the versioned
-`host_features.multiband_insert` object, with the reverb character and which
-inputs have Auto gain on. The Host spring's On state, two input sends, Dwell,
-Tone, Drip, Width, pre-delay and Main output level are stored under
-`host_features.spring_reverb`. What the Host changed in the unit's mixer for
+GTK full Host setups also save both inputs' Multiband settings under the versioned
+`host_features.multiband_insert` object, with reverb movement and which inputs
+have Auto gain on. What the Host changed in the unit's mixer for
 Multiband, and the buffer it borrowed, belong to the running session and are
-left out of snapshot files; any dedicated Spring return ownership is treated
-the same way. A snapshot written before 2026-09-11 carries the
+left out of setup files. A setup written before 2026-09-11 carries the
 retired playback multiband as `host_features.multiband`: its settings are
 loaded into both inputs' Multiband, switched off, and a completed-load notice
 says so. The passive source lifecycle is reconciled separately. Obsolete `host_features.pan` data is discarded with a completed-load
 notice, regardless of its old contents, and is never re-saved. Other invalid
 Host-only data is rejected before any device setting is applied. These objects are deliberately absent
 from device-slot records, cached-device reapply,
-and standalone-device claims. Older snapshots without these objects continue
+and standalone-device claims. Older setup files without these objects continue
 to load and do not change the current Host-only state.
 
 ### Keeping settings after reconnect
 
 The Host picks up where it left off, as Universal Control did. Everything it
 sends to the unit is kept on disk (`~/.cache/io24/shadow.json`), and its own
-features (both inputs' Multiband, reverb character and movement, and which
-inputs have Auto gain on, plus the Host spring and any 96 kHz Host Delay) are saved to
+features (both inputs' Multiband, reverb movement, and which
+inputs have Auto gain on, plus any high-rate Host Delay) are saved to
 `~/.config/io24/last-session.json` every few seconds and on exit.
 
 Each time the io24 connects, the Host re-sends the settings the unit cannot
@@ -707,8 +718,8 @@ input. Host-only features come back once per launch, not on every reconnect.
 
 Two consequences: settings changed from Universal Control on another computer in
 between are overwritten on the next connection, and solo starts off each launch,
-as it did in Universal Control. Auto gain, which Universal Control also started
-off, comes back on for the inputs that had it.
+as it did in Universal Control. Auto Gain is a Linux Host convenience, not an
+active UC 4.7.2 control; the Host restores it for the inputs that had it on.
 
 `io24.py startup save` and `systemd/io24-startup.service` remain for applying
 settings without the Host window. See

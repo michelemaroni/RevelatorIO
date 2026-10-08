@@ -15,10 +15,11 @@ Device-resident preset records are retained in scene files when their complete
 bodies are known to this Host, but scene load never overwrites the device
 library. A failed load compensates from a pre-write checkpoint and reports when
 unknown prior state prevents a complete rollback.
-Fields that the io24 protocol cannot faithfully represent are reported with a
-specific reason: mono-source pan/stereo width, FXA, DAW post-DSP capture tap,
-and output mono fold-down. UC component names and Mirror Main are persisted as
-Host state because neither requires inventing a missing device command.
+Fields that the io24 protocol cannot faithfully vary are reported with a
+specific reason. Their fixed ordinary values are accepted as satisfied:
+centred mono pan, FXA off, post-DSP capture and stereo output. UC component
+names and Mirror Main are persisted as Host state because neither requires
+inventing a missing device command.
 """
 import argparse
 import copy
@@ -355,14 +356,39 @@ def plan(scene, vintage=False, sample_rate_hz=48000.0,
                               "%s solo in %s = %s" % (prefix, bus, on)))
         _plan_processing(channel, component, prefix, fs, calls, voicefx, skips,
                          allow_host_delay=allow_host_delay)
+        # These four UC fields exist in its generic component/scene schema but
+        # the io24 fixes their ordinary state in hardware: mono inputs are
+        # centred, an absent independent reverb send is off, and capture is
+        # post-DSP.  A scene already asking for that state is satisfied, not an
+        # omission.  Only a request that differs remains explicit.
+        fixed_fields = {
+            "pan": (
+                _number(component["pan"], "%s.pan" % prefix, 0.0, 1.0)
+                if "pan" in component else None,
+                0.5, "mono-source pan is fixed at centre by block 100"),
+            "FXA": (
+                _number(component["FXA"], "%s.FXA" % prefix, -96.0, 10.0)
+                if "FXA" in component else None,
+                -96.0, "independent FXA send is fixed off"),
+            "dawpostdsp": (
+                int(_toggle(component["dawpostdsp"],
+                            "%s.dawpostdsp" % prefix))
+                if "dawpostdsp" in component else None,
+                1, "DAW capture tap is fixed post-DSP"),
+        }
+        for field, (value, fixed, reason) in fixed_fields.items():
+            if field in component and not math.isclose(
+                    float(value), float(fixed), abs_tol=1e-7):
+                skips.append("%s.%s = %r (%s)" %
+                             (prefix, field, component[field], reason))
         for field, reason in (
-                ("pan", "mono-source pan is not representable by block 100"),
                 ("stereopan", "stereo width/mono collapse is not representable"),
-                ("FXA", "no exact io24 wire mapping exists"),
-                ("dawpostdsp", "DAW capture-tap selection is Host-bound"),
                 ("preset_name", "display metadata is not a live parameter"),
                 ("linkmaster", "UC component-tree metadata")):
             if field in component:
+                if field == "stereopan":
+                    _number(component[field], "%s.%s" % (prefix, field),
+                            0.0, 1.0)
                 skips.append("%s.%s = %r (%s)" %
                              (prefix, field, component[field], reason))
         known = {
@@ -450,8 +476,13 @@ def plan(scene, vintage=False, sample_rate_hz=48000.0,
                 on = _toggle(component["mute"], "%s.mute" % prefix)
                 mutes.append(("set_bus_mute", (bus, on), {},
                               "%s output mute = %s" % (prefix, on)))
+            if "mono" in component:
+                mono = _toggle(component["mono"], "%s.mono" % prefix)
+                if mono:
+                    skips.append(
+                        "%s.mono = %r (output mono fold-down is fixed off)" %
+                        (prefix, component["mono"]))
             for field, reason in (
-                    ("mono", "output mono fold-down is not representable"),
                     ("preset_name", "display metadata is not live state"),
                     ("link", "output link is component-tree metadata"),
                     ("linkmaster", "UC component-tree metadata")):
@@ -871,7 +902,7 @@ def export_snapshot(snapshot, host_features=None, solo=None, presets=None):
     if host_delay is not None:
         host_delay = io24_voicefx_delay.validate_host_feature(host_delay)
         # The device shadow deliberately retains the user's last native Delay
-        # intent while hardware block 201 is quiesced.  At 96 kHz this Host
+        # intent while hardware block 201 is quiesced. Above 48 kHz this Host
         # feature is newer and authoritative, including its input owner.
         for channel in (1, 2):
             scene["line"]["ch%d" % channel].pop("voicefx", None)

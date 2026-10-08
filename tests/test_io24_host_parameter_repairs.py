@@ -16,6 +16,7 @@ from unittest import mock
 import warnings
 
 import io24
+import io24_alt_eq
 import io24_mbc
 import io24_presets
 import io24_scene
@@ -163,7 +164,10 @@ class ReverbAudiblePathTests(unittest.TestCase):
 
         io24gtk.Win._push_reverb(host)
 
-        self.assertEqual(device.calls, [("reverb_off", (), {})])
+        self.assertEqual(device.calls, [("set_reverb", (), {
+            "on": False, "size": 0.5, "mix": 0.35,
+            "hp_freq": 200.0, "predelay": 0.02, "fs": 48000.0,
+        })])
 
 
 class PhonesSourceTests(unittest.TestCase):
@@ -259,7 +263,7 @@ class PhonesSourceTests(unittest.TestCase):
 
 @unittest.skipUnless(
     Path(io24_presets.PRESET_JSON).is_file(),
-    "requires factory data recovered from the maintainer's lawful UC copy",
+    "requires factory data recovered from the maintainer's local UC install",
 )
 class FactoryPresetDispatchTests(unittest.TestCase):
     @classmethod
@@ -301,6 +305,8 @@ class FactoryPresetDispatchTests(unittest.TestCase):
         self.assertEqual(bands[0]["shape"], "lowshelf")
         self.assertEqual(bands[3]["shape"], "peaking")
 
+    @unittest.skipUnless(io24_alt_eq.designer_status()[0],
+                         "exact UC 4.7.2 EQ designer is unavailable")
     def test_alternate_eq_dispatches_exactly_without_standard_flattening(self):
         for class_id, model in (
                 ("{C0730CBB-5135-4558-9222-C40BDBA036ED}", "Passive"),
@@ -452,6 +458,8 @@ class FactoryPresetDispatchTests(unittest.TestCase):
         self.assertEqual(io24_scene.VINTAGE_HIMID_HZ, (3200.0, 4800.0, 7200.0))
         self.assertEqual(io24_scene.VINTAGE_HIGH_HZ, 12000.0)
 
+    @unittest.skipUnless(io24_alt_eq.designer_status()[0],
+                         "exact UC 4.7.2 EQ designer is unavailable")
     def test_scene_vintage_uses_exact_alternate_eq_not_standard_biquads(self):
         scene = {"line": {"ch1": {"eq": {
             "__classid": io24_scene.EQ_VINTAGE,
@@ -1271,6 +1279,18 @@ class HostRefinementTests(unittest.TestCase):
             def set_policy(self, horizontal, vertical):
                 self.policy = (horizontal, vertical)
 
+        class Clamp:
+            def __init__(self, **kwargs):
+                self.maximum_size = kwargs.get("maximum_size")
+                self.tightening_threshold = kwargs.get(
+                    "tightening_threshold")
+
+            def set_child(self, child):
+                self.child = child
+
+            def set_hexpand(self, value):
+                self.hexpand = value
+
         strips = [Strip() for _ in range(4)]
         host = SimpleNamespace(
             _input_strip=lambda ch: strips[ch - 1],
@@ -1278,14 +1298,44 @@ class HostRefinementTests(unittest.TestCase):
             _master_strip=lambda: strips[3],
         )
         with mock.patch.object(io24gtk.Gtk, "Box", Box), \
-                mock.patch.object(io24gtk.Gtk, "ScrolledWindow", Scrolled):
+                mock.patch.object(io24gtk.Gtk, "ScrolledWindow", Scrolled), \
+                mock.patch.object(io24gtk.Adw, "Clamp", Clamp):
             page = io24gtk.Win._mixer_page(host)
 
-        self.assertFalse(page.child.homogeneous)
+        self.assertEqual(page.child.maximum_size, io24gtk.MIXER_WIDTH)
+        self.assertEqual(
+            page.child.tightening_threshold, io24gtk.MIXER_TIGHTEN)
+        self.assertTrue(page.child.hexpand)
+        self.assertTrue(page.child.child.homogeneous)
         self.assertEqual(
             page.policy[0], io24gtk.Gtk.PolicyType.NEVER)
         self.assertEqual([strip.hexpand for strip in strips],
-                         [True, True, False, False])
+                         [True, True, True, True])
+
+    def test_mixer_fader_banks_grow_vertically_at_large_window_sizes(self):
+        class Box:
+            def __init__(self, **kwargs):
+                self.homogeneous = kwargs.get("homogeneous", False)
+                self.halign = kwargs.get("halign")
+
+            def set_size_request(self, width, height):
+                self.size_request = (width, height)
+
+            def set_vexpand(self, value):
+                self.vexpand = value
+
+        with mock.patch.object(io24gtk.Gtk, "Box", Box):
+            input_bank = io24gtk.mixer_fader_bank(8)
+            monitor_bank = io24gtk.mixer_fader_bank(14, homogeneous=True)
+
+        self.assertEqual(input_bank.size_request, (-1, 260))
+        self.assertTrue(input_bank.vexpand)
+        self.assertFalse(input_bank.homogeneous)
+        self.assertTrue(monitor_bank.vexpand)
+        self.assertTrue(monitor_bank.homogeneous)
+        self.assertIn(
+            "mixer_fader_bank(14, homogeneous=True)",
+            inspect.getsource(io24gtk.Win._master_strip))
 
     def test_factory_sound_filter_matches_name_and_description(self):
         self.assertTrue(io24gtk.factory_preset_matches(
@@ -1371,12 +1421,14 @@ class HostRefinementTests(unittest.TestCase):
         self.assertEqual(widgets["comp_curve"].draws, 2)
 
     def test_host_file_worker_uses_its_serialized_device_argument(self):
-        source = inspect.getsource(io24gtk.Win._pick)
+        picker = inspect.getsource(io24gtk.Win._pick)
+        loader = inspect.getsource(io24gtk.Win._load_full_host_setup)
 
-        self.assertIn("dev.save_preset(", source)
-        self.assertIn("dev.load_preset(", source)
-        self.assertNotIn("self.ctl.dev.save_preset(", source)
-        self.assertNotIn("self.ctl.dev.load_preset(", source)
+        self.assertIn("dev.save_preset(", picker)
+        self.assertIn("self._load_full_host_setup(dev, path)", picker)
+        self.assertIn("dev.load_preset(", loader)
+        self.assertNotIn("self.ctl.dev.save_preset(", picker)
+        self.assertNotIn("self.ctl.dev.load_preset(", picker + loader)
 
     def test_multiband_chain_start_failure_cleans_private_config(self):
         with tempfile.TemporaryDirectory() as parent:

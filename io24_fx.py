@@ -81,7 +81,10 @@ TAG_MBDF = 0x4d426466   # 'MBdf'  sample-rate-indexed biquad table (model 0)
 MODEL_NAMES = ['Transformer', 'De-Tuner', 'Vocoder',
                'Ring Modulator', 'Filters', 'Delay']
 
-DELAY_BLOCKED_RATE_HZ = 96000.0
+# 48 kHz is the highest rate with direct physical Delay acceptance. The same
+# private histories grow with the clock, so 88.2 kHz is kept off the firmware
+# path along with the observed 96 kHz reset case.
+DELAY_NATIVE_MAX_RATE_HZ = 48000.0
 RATE_AWARE_MODELS = frozenset((
     "transformer", "detuner", "vocoder", "delay",
 ))
@@ -97,7 +100,7 @@ def delay_needs_host_fallback(fs):
         rate = float(fs)
     except (TypeError, ValueError):
         return False
-    return math.isfinite(rate) and rate >= DELAY_BLOCKED_RATE_HZ
+    return math.isfinite(rate) and rate > DELAY_NATIVE_MAX_RATE_HZ
 
 
 def validate_delay_sample_rate(fs):
@@ -105,8 +108,9 @@ def validate_delay_sample_rate(fs):
 
     Delay was waveform-verified at 48 kHz. On 2026-09-21, selecting it while
     the io24 was clocked at 96 kHz immediately re-enumerated the interface as
-    its bootloader. The exact firmware failure is not inferred here; this is a
-    narrow interlock around the observed unsafe transition.
+    its bootloader. Its private histories also grow substantially at 88.2 kHz,
+    which has no physical Delay acceptance. The exact firmware failure is not
+    inferred here; rates above the accepted boundary use the Host insert.
     """
     if fs is None:
         raise UnsafeDelayRate(
@@ -120,10 +124,11 @@ def validate_delay_sample_rate(fs):
     if not math.isfinite(rate) or not 8000.0 <= rate <= 192000.0:
         raise UnsafeDelayRate(
             "Delay needs a valid current sample rate before it can be sent")
-    if rate >= DELAY_BLOCKED_RATE_HZ:
+    if rate > DELAY_NATIVE_MAX_RATE_HZ:
         raise UnsafeDelayRate(
-            "hardware Delay is blocked at 96 kHz because selecting it reset "
-            "the io24; the Linux Host must use its safe Delay insert")
+            "hardware Delay is blocked above 48 kHz; 88.2 kHz has no safe "
+            "acceptance and selecting it at 96 kHz reset the io24. The "
+            "Linux Host must use its safe Delay insert")
     return rate
 
 
@@ -162,7 +167,8 @@ _VOICEFX_MODEL_BY_CLASS_ID = {
     for model, class_id in VOICEFX_CLASS_IDS.items()
 }
 
-# A runtime-safe transcription of ``re/uc_component_model/dsp_fx_params.xml``.
+# A runtime-safe transcription of the Voice FX schema documented in
+# ``PROTOCOL.md`` under "The per-module On is already on the wire".
 # The retained XML is the authority for order, names, type, bounds, defaults,
 # curve, midpoint, units, flags and list labels.  ``builder`` is the one local
 # addition: it names the exact keyword accepted by the recovered wire builder.

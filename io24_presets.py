@@ -17,7 +17,7 @@ covered by its GPL. The private research tree retains it at
 re/uc_factory_presets.json, while the runtime wheel deliberately excludes it.
 See README.md and PUBLICATION.md before redistributing a source tree. The Host
 continues without the file and reports the factory catalog as unavailable; a
-user can regenerate it from a lawfully obtained installer with
+user can regenerate it from a local Universal Control installer with
 re/extract_presets.py.
 
 A preset names seven modules. Six map onto DSP this driver drives:

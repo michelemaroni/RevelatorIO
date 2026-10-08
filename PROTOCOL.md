@@ -10,7 +10,15 @@ chronological: the newest dated result controls. Within the older notebook,
 labels such as “controlling” describe what was known on that date, not the
 current implementation.
 
-The current boundaries are the 2026-09-21 Delay and Spring section below, the
+The clean public repository keeps these notes but not the private capture and
+analysis trees named by some evidence paths below. Those paths are provenance
+labels for the retained research workspace, not files required to run the
+Host. Android implementation and release records live separately in
+[`Ajuntanaga/io24-android`](https://github.com/Ajuntanaga/io24-android).
+
+The current boundaries are the 2026-09-23 shared-reverb section below, the
+2026-09-22 controller-parity section, the
+2026-09-21 Delay safety section, the
 2026-09-20 Voice FX, preset, and mixer sections, the 2026-09-19 scene section,
 the 2026-09-18 alternate-EQ section, and the three 2026-09-17 VoiceFX sections.
 In short: UC Store is `MemP/PrsM`; all six VoiceFX models process audio on
@@ -19,7 +27,83 @@ restores UC's explicit Input 1/Input 2 assignment step; and a sent Device
 Presets record remains
 `WRITE_SENT_UNVERIFIED`, not body readback or cold-boot proof.
 
-## 2026-09-21 controlling safety result: Delay at 96 kHz and Spring Main return
+## 2026-09-24 implementation audit: safe persistence and public boundaries
+
+An independent read-only whole-tree audit found implementation gaps that are
+now covered by executable tests across the two independent projects. Full Host
+setups and automatic recovery accept the Host-only `voicefx_delay` state
+instead of rejecting it as an unknown feature. Android-specific connection,
+scene, and assignment contracts are maintained in the Android repository.
+
+Active Delay is never embedded in a device-resident preset block at any sample
+rate. Its semantic controls belong in a full Host setup, where the live rate
+can choose safe execution placement when the state is restored. The companion
+Android controller applies its own conservative placement contract because it
+cannot observe another app's USB audio clock.
+
+The audit also found that the earlier safety boundary left 88.2 kHz on the
+native path even though physical Delay acceptance exists only at 48 kHz. The
+firmware trace proves that Delay's private histories grow with sample rate;
+88.2 kHz therefore carries most of the 48-to-96-kHz increase but has no live
+acceptance result. This does **not** claim that 88.2 kHz resets the interface.
+It sets the conservative execution boundary at the highest accepted rate:
+44.1/48 kHz may use native model 5, while 88.2/96 kHz use the Host processor.
+The Linux Host enforces that boundary before any model-5 selection.
+
+Each public source boundary has an exact allowlist. This Host repository
+discloses the pinned, neutral 1,028-byte native-slot structural template used
+by its builder. It is not a named factory preset or preset library, and every
+decoded user-facing Fat Channel value is replaced before a body is eligible
+for transport.
+
+## 2026-09-23 controlling result: shared reverb presents one honest algorithm
+
+The io24 exposes one block-202 reverb algorithm with size, wet blend, input
+high-pass, and pre-delay. The Host's retired Character menu only moved those
+four values to named positions; it did not select different native algorithms
+and the audible distinctions were weak. The menu and its named presets were
+removed. The direct controls remain, and the Host's useful slow Room-size
+movement remains explicit as a switch plus an exact ± depth.
+
+Movement now sends transient values at four bounded writes per second, pauses
+while reverb is off, and follows a manually edited Room-size centre. Those
+transient writes do not replace the persistent reverb state, so saving a setup
+does not capture an arbitrary point on the movement cycle.
+
+New Host setup files store only `reverb_movement`. A legacy
+`reverb_character` object is accepted during load, its movement switch and
+depth are migrated, and the retired name is not saved again. This UI and state
+migration was verified without USB or audio hardware; it makes no new claim
+about device audibility.
+
+## 2026-09-22 controlling result: one active Voice FX and explicit save scopes
+
+Universal Control's component XML gives every Voice FX model its own storable
+`on` field, while its rack presents one active algorithm. The Linux Host
+preserves every model's parameter values but normalizes the On state: enabling
+one model clears the other five. Preset, scene, setup, and reconnect adoption
+pass through the same rule. This does not add a container-level master switch
+and does not erase a model's remembered knobs.
+
+The experimental separate Host reverb was removed from the product. The Effects
+page keeps the io24's native shared block-202 reverb and Voice FX. Setup files
+written by the retired build may still contain `spring_reverb`; the loader
+ignores that field with a migration notice and never saves it again.
+
+The front-facing save scopes are now explicit. A channel preset is one input's
+Fat Channel plus selected Voice FX. A UC scene is the portable whole-device and
+mixer document. A full Host setup also retains Linux-only effects. Automatic
+recovery is the unnamed last session. The Linux **Save to device…** dialog asks
+for Input 1/2 and either front-panel block 1/2 (`MemP/Stat`) or Device library
+slot 1–6 (`MemP/PrsM`) before transport.
+
+The io24 cannot read a stored body back, so the Host reports a completed send
+as `WRITE_SENT_UNVERIFIED`. These changes were built and tested without USB or
+audio hardware; audibility, recall, and power-cycle persistence were not
+inferred. The separate Android repository records its own matching encoder and
+safety evidence.
+
+## 2026-09-21 safety result: Delay at 96 kHz
 
 Selecting Voice FX Delay while the io24 was running at 96 kHz caused an
 immediate USB disconnect. The device then enumerated as `194f:0405`,
@@ -77,8 +161,9 @@ establish that the extra 115,200 bytes are requested from a dynamic path and
 that the actual 96 kHz allocation result remains unproved.
 
 The earlier physical Delay acceptance ran at 48 kHz. It does not establish
-that the firmware transition is safe at 96 kHz. The Linux Host therefore never
-selects hardware model 5 at that rate. The complete package also pins the
+that the firmware transition is safe above 48 kHz. The Linux Host therefore
+never selects hardware model 5 at 88.2 or 96 kHz. The 96 kHz reset is observed;
+the 88.2 kHz interlock is conservative. The complete package also pins the
 replacement path: the first `VoFx` stores the requested model and asks block
 201 to enter bypass; after its nominal 40 ms transition, a replayed `VoFx`
 calls the work virtual synchronously and stores the new delegate at
@@ -96,12 +181,13 @@ device-slot recall and reconnect replay all adopt the same Host path.
 
 The runtime barrier uses the live ALSA period and rate when available, then
 the PipeWire forced/default clock, rather than assuming 512 frames. If the
-interface is absent, a requested or saved 96 kHz clock is pinned temporarily
-at 48 kHz; session replay waits until attach, the model-0 preflight, and the
-guarded move to 96 kHz have completed. This covers Host-owned transitions. It
+interface is absent, a requested or saved 88.2/96 kHz clock is pinned
+temporarily at 48 kHz; session replay waits until attach, the model-0
+preflight, and the guarded high-rate move have completed. This covers
+Host-owned transitions. It
 does not claim to intercept an unrelated program changing PipeWire directly.
 
-At 96 kHz, Delay's exact controls and input owner are persisted as the
+Above 48 kHz, Delay's exact controls and input owner are persisted as the
 Host-only `voicefx_delay` feature rather than written into the device shadow.
 Scene export makes that state authoritative over a stale shadowed model, and
 the rate-aware scene planner validates it without emitting `set_fx`. The Host
@@ -112,18 +198,6 @@ direct device path retains the hard interlock and requires an explicit current
 rate. Other Voice FX models retain their rate-aware hardware transaction. The
 Host fallback, transition ordering and DSP response are hardware-free verified;
 no live USB or listening run was made while implementing it.
-
-The active Linux PipeWire profile exposed three playback positions,
-`[FL, FR, LFE]`, not six. The first Spring implementation hard-coded USB 5-6
-and failed before audio could start. Spring now selects the best stereo pair
-the exact io24 playback node exposes. Six-channel profiles use USB 5-6,
-four-channel profiles use USB 3-4, and stereo or 2.1 profiles use USB 1-2. The
-last case mixes the wet-only stream into the ordinary Main playback sink and
-makes no device-mixer writes. Dedicated pairs are still assigned to physical
-Main 1-2 only and restored exactly. Output gain now lives in the Spring
-processor, so the same control works on either route. These graph, DSP,
-migration, and route contracts are hardware-free verified; live Spring
-audibility remains a separate acceptance check.
 
 The observed Voice FX tail surviving a laptop reboot establishes powered-device
 runtime retention while the io24 itself remains powered. It does not establish
@@ -174,7 +248,7 @@ Channel-2 routing failure. Evidence is under
 `runs/20260921T162414-0700-voicefx-input2-assignment/` and
 `runs/20260921T182831-0700-transformer-selector-replay/`.
 
-## 2026-09-20 controlling preset result: UC Store is `PrsM`, not a button-slot write
+## 2026-09-20 preset result: UC Store is `PrsM`, not a button-slot write
 
 UC 4.7.2 has two separate preset concepts. The four front-panel fast-access
 blocks are `MemP/Stat` indexes 0–3; UC exposes their selected index and read-only
@@ -185,11 +259,13 @@ Presets and 22–27 are Input 2's six. **RestorePreset** applies a retained
 library/local record through the ordinary component setters; it does not recall
 `Stat`.
 
-The Linux Host now follows that split. **Send to Device Presets** uses the exact
+At that date the Linux Host followed that split. **Send to Device Presets** used the exact
 tagged `PrsM` envelope and records an identity-scoped
 `WRITE_SENT_UNVERIFIED` receipt in `device-presets.json`. **Load** replays that
 complete retained record through the normal Fat Channel and VoiceFX setters.
-The older `Stat` writer is no longer a normal GTK action. A transport reply
+The older `Stat` writer was no longer a normal GTK action. The 2026-09-22
+explicit destination dialog supersedes that UI decision after the
+firmware-native body encoder was established. A transport reply
 still cannot prove stored-body readback, cold-boot persistence, or standalone
 VoiceFX audibility because firmware exposes no library-body read command.
 
@@ -197,7 +273,7 @@ Scene export now includes every complete `Stat` and `PrsM` body known from the
 current unit's local registries. Scene load validates and reports the libraries
 but never overwrites them.
 
-## 2026-09-20 mixer parity boundary and Host spring reverb
+## 2026-09-20 mixer parity boundary
 
 The UC 4.7.2 component model, retained device-page capture and recovered mixer
 code now give one closed comparison for the Mixer tab. The Linux Host covers
@@ -210,18 +286,24 @@ same complete state visible as a matrix on **Routing**.
 The remaining UC fields are explicit protocol gaps rather than unfinished
 nearby controls:
 
-- `line.chN.pan`: the block-100 mixer has one level per source/bus and ignores
-  its index field, so it cannot place one mono source independently. The CLI's
+- `line.chN.pan`: UC stores and displays this generic field, but the block-100
+  mixer has one level per source/bus, ignores its index field, and constructs
+  mono inputs without an active pan stage. Centre (`0.5`) is therefore already
+  satisfied; any other scene value remains an explicit omission. The CLI's
   older `pan` operation is correctly limited to a Host-side balance across a
   stereo pair using UC's recovered -3 dB-centre law; the GTK Host does not
   mislabel that as mono pan.
 - `stereopan`: no representable width/mono-collapse control.
 - `FXA`: UC names a per-input reverb send, but no independent io24 wire field
   has been proved. The device exposes one unified channel processing scalar;
-  substituting it would also change EQ and dynamics.
-- `dawpostdsp`: no proved safe route. Apparent neighboring ids collide with
-  unrelated object gain/Main-volume controls.
-- output `mono` has no proved representation.
+  substituting it would also change EQ and dynamics. The off value (`-96 dB`)
+  is already satisfied; a non-off scene request is reported.
+- `dawpostdsp`: physical capture establishes the io24's fixed post-DSP tap.
+  That value (`1`) is accepted as satisfied. Pre-DSP remains unavailable;
+  apparent neighboring ids collide with unrelated object gain/Main-volume
+  controls.
+- output `mono` is fixed off. Stereo (`0`) is satisfied; fold-down (`1`) is
+  reported as unavailable.
 - writable component names are UC host-model metadata, not an io24 command.
   Linux now persists them in its shadow and scene/preset files.
 - Mirror Main is now a persistent Linux Host latch. Main level, assignment and
@@ -229,39 +311,10 @@ nearby controls:
   restores that aux's retained state. This matches UC behavior while the Host
   owns the mix without claiming a firmware-resident latch.
 - physical Main mute is readable in `JaSt` slot 42 bit 1, but no writable
-  parameter reaches it. UC itself binds `hardwareMute` as display-only. Linux's
-  output mute is the distinct software control.
-
-The Effects page also has a **Host spring reverb**, deliberately separate from
-device block 202. `io24_spring.c` is a wet-only stereo LADSPA processor:
-short dispersive all-pass stages excite two decorrelated banks of damped
-resonators. Its public controls are Input 1/2 send gain, Dwell, Tone, Drip,
-Width, pre-delay, and Main output gain. `io24_spring.py` validates/persists that
-state, builds the content-addressed plugin, emits a no-fallback/no-remix
-PipeWire graph and owns its lifecycle.
-
-The graph captures physical Inputs 1/2 after the Fat Channel and returns wet
-audio through the best stereo pair exposed by the active io24 playback profile.
-A dedicated USB 3-4 or 5-6 pair is an internal transport, not the destination:
-while enabled, the Host assigns it to **physical Main 1-2 only**, removes it
-from Mix A/Mix B, and restores every prior assignment and known fader state on
-disable or clean shutdown. A stereo or 2.1 profile instead uses USB 1-2 and
-leaves its existing device routes untouched. The graph still forbids remix and
-fallback to another sound device.
-
-`host_features.spring_reverb` keeps the algorithm controls and On state in Host
-snapshots and last-session recovery. Named snapshots strip the temporary route
-ownership record, exactly as Multiband strips its borrowed mixer/buffer state.
-UC scene export reports the object as Host-only, and device-slot code never
-serializes it.
-
-Hardware-free contracts cover schema rejection, exact PipeWire target/channel
-selection, Main-only route restoration, LADSPA ABI, silence, bounded output,
-pre-delayed late energy, tail decay, stereo decorrelation/mono width, GTK state
-capture and wheel contents. The implementation has been visually rendered at
-desktop and narrow widths with the stub-device paint harness. No USB operation
-was performed for this change, so live Main-output audibility remains a
-separate acceptance result rather than being inferred from those tests.
+  parameter reaches it. UC itself binds `hardwareMute` as display-only. The
+  Linux Monitoring strip now labels that status separately, drives audible
+  Main muting through its retained bus-mute model, and labels wire 6 accurately
+  as Phones mute.
 
 ## 2026-09-19 controlling result: UC scene save/load and settings parity
 
@@ -349,9 +402,10 @@ Host snapshots and reconnect replay. Selecting Standard removes the alternate
 shadow for that input, and selecting Passive or Vintage removes its Standard
 band shadow, so reconnect cannot replay two competing EQ models.
 
-The proprietary DLL is read as data and never loaded or executed. The default
-path is the retained UC 4.7.2 artifact; `IO24_UC472_DSPUSBDEVICE` may point to
-another lawful copy, whose exact size and SHA-256 must match. Hardware-free
+The Universal Control DLL is read as data and never loaded or executed. The
+default path is the retained UC 4.7.2 artifact;
+`IO24_UC472_DSPUSBDEVICE` may point to the matching file from any local UC
+4.7.2 installation, whose exact size and SHA-256 must match. Hardware-free
 source, designer, packet, preset and UI-state regressions pass. No USB/device
 operation was used for this result, so exact implementation is established but
 a dedicated audible hardware A/B remains a separate gated test.
@@ -1811,7 +1865,7 @@ hardware from Linux, with no PreSonus software involved:
 |---|---|
 | **Preamp & routing** | gain, phantom, high-pass, mutes, channel link, monitor blend, headphone & main volume |
 | **Dynamics** | gate, compressor (3 models), limiter — with measured transfer curves |
-| **Effects** | shared reverb measured audible; all six VoiceFX models objectively verified through physical Input 1. The separate Host spring passes its hardware-free DSP/route contracts; live Main-output acceptance is pending. |
+| **Effects** | shared reverb measured audible; all six VoiceFX models objectively verified through physical Input 1. |
 | **Mixer** | per-source sends/assigns/mute/solo and bus master/mute for Main / Mix A / Mix B, with the gain law measured exact. The UC-only fields without proved io24 representations are listed in the 2026-09-20 parity boundary above. |
 | **Metering** | levels and per-stage gain reduction, streamed at 10 Hz |
 | **Compatibility** | a UCNET shim so existing PreSonus plugins drive the device unmodified |
@@ -2196,16 +2250,19 @@ upset the firmware. That remains an unresolved risk worth respecting — but the
 
 ### Rules
 
-1. **`SetP` is fire-and-forget** — no acknowledgement. Silence tells you nothing
-   about whether a write was accepted, rejected, or ignored.
+1. **`SetP` is semantically fire-and-forget.** It has no data-bearing success
+   reply. Firmware 1.28 can emit an eight-byte, header-only transport reply;
+   other SetP paths can remain silent. Neither outcome proves that a write was
+   accepted or applied. Drain the short reply when present, or finish a bounded
+   no-reply wait, before sending the next request.
 2. **The `JaSt` slot index is not the `SetP` paramId.** They are unrelated spaces
    (§6a). Writing internal id 13 does *not* set `input1Gain`; wire id 3 does.
 3. Only send wire ids that appear in the §6a tables. Out-of-range ids are
    rejected and unmapped ones are no-ops, but there is no reason to probe blindly.
 4. Values are **clamped by the firmware** to each parameter's min/max, so an
    in-range id cannot be driven out of its declared range.
-5. Respect the synchronous rule — never leave the OUT pipe with an outstanding
-   unanswered command.
+5. Respect the synchronous rule: drain a SetP transport reply when one is
+   emitted, and never pipeline the following GetP behind unread endpoint data.
 6. Interface 6 (DFU) is never touched. `'FRst'` is not used by this code.
 
 ---
@@ -2450,8 +2507,11 @@ coefficients yourself.
 | EQ numerical stability | **verified exhaustively** — worst pole 0.99995 over the whole accepted parameter space in float32; shelves/filters overshoot above Q≈1 (§9d) |
 | Host-side presets | **verified on hardware** — save → move everything → load restored all seven live values exactly (§9d) |
 
-> `SetP` is **fire-and-forget**: it returns no reply *by design*. An empty
-> response to a write is expected and is not an error.
+> `SetP` is **semantically fire-and-forget**: transport completion is not
+> parameter readback. Firmware 1.28 may return only an eight-byte paesdk header,
+> while other writes return no payload. A client must consume that header when
+> present before issuing a verification GetP. Silence and a header-only reply
+> are both expected and neither proves the state changed.
 
 **Both directions are verified on hardware.** Confirmed round trips:
 
@@ -3429,9 +3489,7 @@ UCNET shim, which is now built and hardware-verified (§9).
    Host state; nearby device fields are not substituted. Block 100 also has no
    readback, so mixer writes remain shadow-backed.
 4. **Pending audible acceptance.** Passive and Vintage EQ have exact UC
-   designers and packet routes but still need a dedicated audible A/B. The Host
-   spring reverb has hardware-free graph/processor coverage but still needs its
-   live Main-output acceptance run.
+   designers and packet routes but still need a dedicated audible A/B.
 5. **96 kHz DSP coverage.** The device clocks at 96 kHz and the Host Mix A/B
    source smoke passed there, but every device DSP block has not been swept at
    that rate. Hardware Delay is deliberately blocked after its model selection
@@ -3524,6 +3582,15 @@ measured −7.30 dB point, and its soft-knee equation uses the firmware-derived
 Standard transfer point, the implemented knee equation, and the Host graph
 without inventing a firmware multiband command.
 
+The processed return uses the io24 PipeWire playback sink and then the unit's
+`return/ch1` (USB playback 1-2) mixer source. Node presence alone is not an
+audibility proof: the 2026-09-20 acceptance prestate had that sink at volume
+0.40 and muted, and the guarded probe explicitly opened it before the physical
+loop. Production now performs the same check before removing an input's direct
+feed. It temporarily clears a prior mute, never changes playback volume, and
+restores the mute only after the direct feed is back. Zero volume or failed
+mute readback aborts the insert before mixer rerouting.
+
 **Live Host acceptance (2026-09-20).** The exact production graph was then
 measured through a guarded physical Main-L -> Input-1 loop with a -30 dBFS,
 1 kHz stimulus. Bracketing crossover-only captures drifted by 0.0438 dB;
@@ -3574,8 +3641,11 @@ All 117 host descriptors dumped and grouped into 26 contiguous blocks.
   serialized reverb parameters. The 2026-08-31 firmware trace explains why:
   the model owns a private reverb core configured from those high-level fields.
 * **E21 — fields present but unrendered, worth following up:**
-  * `autogainmode` (id 141, "Automatic Preamp Gain Mode") — a device feature
-    this driver does not expose at all.
+  * `autogainmode` (id 141, "Automatic Preamp Gain Mode") is schema residue,
+    not an established io24 device feature. Both Auto routes resolve to inert
+    descriptor misses, and UC 4.7.2's exact `uceasy/channelstrip.xml` comments
+    out the button with `JF-602 remove Auto Gain button`. The Linux Host's Auto
+    control is therefore an optional Host-only convenience, not UC parity.
   * `pan` (143) and `stereopan` (144, "Stereo Width").
   * `aux1` / `aux2` (124/125, "Mix A Level" / "Mix B Level") — bus master
     levels, distinct from the per-source levels this driver already sets.

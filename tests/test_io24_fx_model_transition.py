@@ -118,6 +118,17 @@ class VoiceFxModelTransitionTests(unittest.TestCase):
         self.assertEqual(device.sent, [])
         self.assertIsNone(getattr(device, "_voicefx_selected_model", None))
 
+    def test_delay_at_882khz_is_also_refused_before_any_usb_write(self):
+        device = self._device()
+
+        with self.assertRaisesRegex(RuntimeError, "above 48 kHz"):
+            device.set_fx(
+                "delay", on=True, time_s=0.173,
+                feedback=0.25, mix=0.5, fs=88200.0)
+
+        self.assertEqual(device.sent, [])
+        self.assertIsNone(getattr(device, "_voicefx_selected_model", None))
+
     def test_host_delay_quiesce_selects_only_bypassed_transformer(self):
         device = self._device()
         waits = []

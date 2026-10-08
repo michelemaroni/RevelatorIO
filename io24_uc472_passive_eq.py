@@ -20,6 +20,7 @@ loaded or executed by the operating system.  This module touches no device.
 import argparse
 import json
 import math
+import os
 import struct
 import sys
 from pathlib import Path
@@ -30,10 +31,10 @@ Machine = _executor.Machine
 _f32 = _executor._f32
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_DLL = (
-    ".superpowers/sdd/2026-08-28-cp34-preset-effect-control/runs/"
-    "20260906T001130-0700-uc472-official-reacquisition/extracted/"
-    "hwaccess/dspusbdevice.dll")
+DEFAULT_DLL = Path(os.environ.get(
+    "IO24_UC472_DSPUSBDEVICE",
+    Path.home() / ".cache" / "io24" / "re" / "dspusbdevice.dll",
+))
 BUFFER = _executor.BUFFER
 NATIVE_RATES = _executor.NATIVE_RATES
 

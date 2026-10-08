@@ -40,6 +40,7 @@ child removes the sink cleanly. Parameters are changed live with
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -1061,6 +1062,80 @@ def node_id(node_name):
     return None
 
 
+def _playback_state(node_name):
+    """The exact PipeWire playback mute/volume state for ``node_name``.
+
+    The Host insert returns through the io24's playback sink. A filter graph
+    can be fully alive while that sink is muted, which leaves the device mixer
+    receiving silence. Read the state before moving any hardware mixer feed so
+    that case fails closed instead of wearing an "On" label.
+    """
+    nid = node_id(node_name)
+    if nid is None or shutil.which("wpctl") is None:
+        raise RuntimeError("the io24 playback sink is unavailable")
+    try:
+        result = subprocess.run(
+            ["wpctl", "get-volume", str(nid)], capture_output=True,
+            text=True, timeout=5)
+    except Exception as error:
+        raise RuntimeError("the io24 playback state could not be read") from error
+    if result.returncode != 0:
+        raise RuntimeError("the io24 playback state could not be read")
+    match = re.search(r"\bVolume:\s*([0-9]+(?:\.[0-9]+)?)", result.stdout)
+    if match is None:
+        raise RuntimeError("the io24 playback volume could not be read")
+    return {"node": node_name, "id": str(nid),
+            "volume": float(match.group(1)),
+            "muted": "[MUTED]" in result.stdout}
+
+
+def _set_playback_mute(node_name, muted):
+    nid = node_id(node_name)
+    if nid is None or shutil.which("wpctl") is None:
+        return False
+    try:
+        result = subprocess.run(
+            ["wpctl", "set-mute", str(nid), "1" if muted else "0"],
+            capture_output=True, text=True, timeout=5)
+    except Exception:
+        return False
+    return result.returncode == 0
+
+
+def acquire_playback(node_name):
+    """Open the io24 playback return and return what must be restored.
+
+    Only mute is borrowed.  The user's output volume is never changed: doing
+    so would also turn up ordinary computer playback on USB 1-2.  Zero volume
+    is rejected before the device input is rerouted, since unmuting it would
+    still produce a silent Multiband return.
+    """
+    state = _playback_state(node_name)
+    if state["volume"] <= 0.0:
+        raise RuntimeError("the io24 playback volume is zero")
+    restore_muted = state["muted"]
+    if restore_muted:
+        if not _set_playback_mute(node_name, False):
+            raise RuntimeError("the io24 playback sink could not be unmuted")
+        try:
+            observed = _playback_state(node_name)
+            if observed["muted"]:
+                raise RuntimeError("the io24 playback sink stayed muted")
+        except RuntimeError:
+            # We changed system state but cannot prove the return is usable.
+            # Put the original mute back before failing closed.
+            _set_playback_mute(node_name, True)
+            raise
+    return {"node": node_name, "restore_muted": restore_muted}
+
+
+def release_playback(guard):
+    """Restore only the mute state borrowed by :func:`acquire_playback`."""
+    if not guard or not guard.get("restore_muted"):
+        return True
+    return _set_playback_mute(guard.get("node"), True)
+
+
 def set_default_output(node_name):
     """Make an existing PipeWire sink the default for new playback."""
     nid = node_id(node_name)
@@ -1354,6 +1429,7 @@ class InsertChain(Chain):
         self.channels = ()
         self.multiband_channels = ()
         self.delay_channels = ()
+        self.playback_guard = None
         self._configuration = None
 
     def start(self, states, capture_target=None, playback_target=None,
@@ -1381,6 +1457,11 @@ class InsertChain(Chain):
         deadline = time.monotonic() + self.START_TIMEOUT_S
         while self.running:
             if set(self.READY_NODES) <= _present_nodes():
+                try:
+                    self.playback_guard = acquire_playback(playback_target)
+                except RuntimeError as error:
+                    self.last_error = str(error)
+                    break
                 self.channels = channels
                 self.multiband_channels = tuple(sorted(states))
                 self.delay_channels = tuple(sorted(delays))
@@ -1394,12 +1475,24 @@ class InsertChain(Chain):
         self.stop()
         return False
 
-    def stop(self):
+    def stop(self, restore_playback=True):
         super().stop()
         self.channels = ()
         self.multiband_channels = ()
         self.delay_channels = ()
         self._configuration = None
+        if restore_playback:
+            self.restore_playback()
+
+    def restore_playback(self):
+        """Put back a mute borrowed for the return, after mixer restoration."""
+        guard = self.playback_guard
+        if guard is None:
+            return True
+        if not release_playback(guard):
+            return False
+        self.playback_guard = None
+        return True
 
     def set_channel_controls(self, channel, controls):
         """Live moves for one channel's graph, keyed as for Chain."""

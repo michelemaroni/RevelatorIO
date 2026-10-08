@@ -466,14 +466,14 @@ class HostStateRepairTests(unittest.TestCase):
         )
         rendered = ast.get_source_segment(source, fx_page)
 
-        self.assertIn('menu.append("Save snapshot…"', source)
-        self.assertIn('menu.append("Load snapshot…"', source)
+        self.assertIn('menu.append("Save full Host setup…"', source)
+        self.assertIn('menu.append("Load full Host setup…"', source)
         self.assertNotIn("Arm 173 ms Delay on Channel 2", rendered)
         self.assertNotIn("Recall stock Slap Echo on Channel 2", rendered)
         self.assertNotIn("Custom-firmware lane extension", rendered)
         self.assertNotIn("Dual-slot private-reverb experiment", rendered)
 
-    def test_effects_page_names_the_two_reverbs_and_removes_dead_experiments(self):
+    def test_effects_page_keeps_native_reverb_and_removes_host_spring(self):
         source = (ROOT / "io24gtk.py").read_text()
         tree = ast.parse(source)
         fx_page = next(
@@ -487,9 +487,10 @@ class HostStateRepairTests(unittest.TestCase):
         }
 
         self.assertIn('title="Shared reverb"', rendered)
-        self.assertIn('title="Spring reverb"', rendered)
-        # The return carries the FX engine too, so it is named for both; the
-        # two reverbs are still distinguished by the rows above it.
+        self.assertNotIn('title="Spring reverb"', rendered)
+        self.assertNotIn("io24_spring", source)
+        self.assertFalse(any(name.startswith("_spring_") for name in methods))
+        # The return carries the native reverb and Voice FX engine.
         self.assertIn('title="Shared effects returns"', rendered)
         # DSP amount and Bypass moved to the Device page
         self.assertNotIn("processing_mix_controls", rendered)
@@ -511,6 +512,29 @@ class HostStateRepairTests(unittest.TestCase):
         self.assertNotIn("_arm_channel2_delay", methods)
         self.assertNotIn("_load_channel2_factory_slap_echo", methods)
 
+    def test_retired_host_spring_state_is_discarded_during_migration(self):
+        spring = {
+            "version": 2,
+            "enabled": True,
+            "input1_db": -6.0,
+            "input2_db": -6.0,
+            "dwell": 0.64,
+            "tone": 0.55,
+            "drip": 0.42,
+            "width": 0.82,
+            "predelay_s": 0.008,
+            "output_db": -12.0,
+            "routing": None,
+        }
+
+        normalized, migrations = io24._normalise_host_features(
+            {"spring_reverb": spring})
+
+        self.assertEqual(normalized, {})
+        self.assertEqual(migrations, [
+            "retired Host spring reverb was ignored",
+        ])
+
     def test_effects_page_uses_concise_uc_style_controls(self):
         source = (ROOT / "io24gtk.py").read_text()
         tree = ast.parse(source)
@@ -522,7 +546,9 @@ class HostStateRepairTests(unittest.TestCase):
 
         self.assertNotIn('title="FX activation unresolved"', rendered)
         self.assertNotIn("currently meter-negative", rendered)
-        self.assertIn('title="Character"', rendered)
+        self.assertNotIn('title="Character"', rendered)
+        self.assertIn('title="Size movement"', rendered)
+        self.assertIn('"Movement depth"', rendered)
         self.assertIn('self._srow("Reverb return blend"', rendered)
         self.assertNotIn('title="Host approximation"', rendered)
         self.assertNotIn("not separate device algorithms", rendered)

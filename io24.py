@@ -583,12 +583,12 @@ def arm_channel2_delay(dev, sample_rate_hz=None):
     if not _preset_is_enabled(before, 2):
         raise HostActionError("Channel 2 preset function must already be enabled")
 
-    channel1_before = _channel1_guard(before)
-    dev.set_preset_enabled(2, True)
-    dev.set_preset_slot(2, 3)
     delay_kwargs = _fx_mod().voicefx_runtime_kwargs(
         "delay", {"on": True, "time_s": 0.173,
                   "feedback": 0.25, "mix": 0.5}, sample_rate_hz)
+    channel1_before = _channel1_guard(before)
+    dev.set_preset_enabled(2, True)
+    dev.set_preset_slot(2, 3)
     delay_parameter_writes = dev.set_fx("delay", **delay_kwargs)
 
     after = dev.read_params()
@@ -2579,7 +2579,8 @@ class Io24:
             # Unlike coefficient-bearing models, Delay does not use ``fs`` in
             # its payload. It is still mandatory safety context: selecting the
             # model at 96 kHz caused a confirmed bootloader reset. Refuse an
-            # unknown clock as well as the observed unsafe one before VoFx.
+            # unknown clock and every rate above the 48 kHz accepted boundary
+            # before VoFx.
             if "fs" not in kw:
                 X.validate_delay_sample_rate(None)
             X.validate_delay_sample_rate(kw["fs"])
@@ -2614,8 +2615,8 @@ class Io24:
             self, fs, quantum=512, *, sleep_fn=time.sleep):
         """Leave block 201 on a lightweight, bypassed model.
 
-        At 96 kHz the Linux Host runs Delay in PipeWire and must not select
-        firmware model 5.  A previously selected hardware model also must not
+        Above 48 kHz the Linux Host runs Delay in PipeWire and must not select
+        firmware model 5. A previously selected hardware model also must not
         remain audible underneath that insert.  Transformer has no rate-scaled
         delay history, so materialize its exact UC state with its own On field
         clear.  This is an internal safety action and intentionally does not
@@ -2659,7 +2660,7 @@ class Io24:
         The device cannot supply this state through readback; ``state`` must be
         a complete known snapshot. Rate-aware models require the caller's
         current device rate. In particular, Delay never assumes 48 kHz because
-        that could bypass the 96 kHz reset interlock.
+        that could bypass the high-rate reset interlock.
         """
         X = _fx_mod()
         model, kwargs = X.voicefx_preset_call(state)
@@ -2892,6 +2893,19 @@ class Io24:
         hp_freq  0..500 Hz high-pass on the reverb input (0 = off)
         predelay 0.0001..0.25 s
         """
+        return self._send_reverb(
+            on=on, size=size, mix=mix, hp_freq=hp_freq,
+            predelay=predelay, fs=fs)
+
+    def set_reverb_transient(self, on=True, size=0.5, mix=0.3,
+                             hp_freq=200.0, predelay=0.02, fs=48000.0):
+        """Send one Host modulation frame without changing saved intent."""
+        return self._send_reverb(
+            on=on, size=size, mix=mix, hp_freq=hp_freq,
+            predelay=predelay, fs=fs)
+
+    def _send_reverb(self, on=True, size=0.5, mix=0.3, hp_freq=200.0,
+                     predelay=0.02, fs=48000.0):
         M = _meters_mod()
         blob = M.reverb_blob(on=on, size=size, mix=mix, hp_freq=hp_freq,
                              predelay=predelay, fs=fs)
@@ -3251,7 +3265,7 @@ def _shadow_runtime_kwargs(name, raw_kwargs, sample_rate_hz):
 
     A saved ``fs`` describes the clock when the state was written, not the
     clock after a reconnect. In particular it must never authorize a saved
-    Delay selection on an unknown or newly selected 96 kHz clock.
+    Delay selection on an unknown or newly selected high-rate clock.
     """
     kwargs = dict(raw_kwargs or {})
     if name != "set_fx":
@@ -3480,11 +3494,12 @@ def _normalise_host_features(features):
         return {}, []
     if not isinstance(features, dict):
         raise ValueError("host_features must be an object")
-    # reverb_character and autogain are the GTK Host's own; it checks their
+    # reverb_movement and autogain are the GTK Host's own; it checks their
     # contents when it adopts them and reports what it could not use. They
     # were saved but refused here, so a snapshot with either failed to save.
     unknown = set(features) - {"multiband", "multiband_insert", "pan",
-                               "reverb_character", "autogain",
+                               "reverb_character", "reverb_movement",
+                               "autogain", "voicefx_delay",
                                "standard_eq", "alternate_eq",
                                "spring_reverb"}
     if unknown:
@@ -3493,11 +3508,28 @@ def _normalise_host_features(features):
                           ", ".join(sorted(str(name) for name in unknown))))
     normalized = {}
     migrations = []
-    for name in ("reverb_character", "autogain"):
+    for name in ("reverb_movement", "autogain"):
         if name in features:
             if not isinstance(features[name], dict):
                 raise ValueError("host feature %s must be an object" % name)
             normalized[name] = json.loads(json.dumps(features[name]))
+    if "voicefx_delay" in features:
+        import io24_voicefx_delay
+        normalized["voicefx_delay"] = \
+            io24_voicefx_delay.validate_host_feature(
+                features["voicefx_delay"])
+    if "reverb_character" in features:
+        legacy = features["reverb_character"]
+        if not isinstance(legacy, dict):
+            raise ValueError("host feature reverb_character must be an object")
+        if "reverb_movement" not in normalized:
+            normalized["reverb_movement"] = {
+                "version": 1,
+                "enabled": legacy.get("movement"),
+                "depth": legacy.get("movement_depth"),
+            }
+        migrations.append(
+            "legacy reverb Character was removed; Movement was retained")
     if "standard_eq" in features:
         import io24_presets
         normalized["standard_eq"] = \
@@ -3535,14 +3567,10 @@ def _normalise_host_features(features):
             migrations.append(
                 "legacy Host multiband insert migrated to UC model schema v2")
     if "spring_reverb" in features:
-        import io24_spring
-        legacy = (isinstance(features["spring_reverb"], dict) and
-                  features["spring_reverb"].get("version") == 1)
-        normalized["spring_reverb"] = io24_spring.validate_state(
-            features["spring_reverb"])
-        if legacy:
-            migrations.append(
-                "legacy Host spring return migrated to schema v2")
+        # Compatibility only: setup files written while the experimental
+        # Host tank existed must still load, but the retired processor and its
+        # state are never restored or saved again.
+        migrations.append("retired Host spring reverb was ignored")
     if "pan" in features:
         migrations.append(
             "legacy Host bus pan was ignored; bus pan controls were removed")

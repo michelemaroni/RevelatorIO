@@ -5,8 +5,7 @@ The device stores coefficients, not the Hz and seconds they were computed
 from, so every write is a function of the clock. The Host used to pass none,
 which left every biquad and time constant built for 48 kHz whatever the
 interface was running at. These tests pin the rate through the write path,
-the limiter release the page never exposed, and the Host-only reverb
-character that no save carried.
+the limiter release the page never exposed, and Host-only reverb movement.
 
 Nothing here opens USB.
 """
@@ -119,6 +118,11 @@ def _window():
 
 
 class DeviceClockTests(unittest.TestCase):
+    def test_fresh_hosts_start_at_the_native_safe_48khz_clock(self):
+        self.assertEqual(io24gtk.DEFAULT_SAMPLE_RATE, 48000)
+        self.assertEqual(
+            io24gtk.audio_clock_preference({})["sample_rate"], 48000)
+
     def test_first_sighting_is_adopted_without_a_resend(self):
         window = _window()
         # Nothing has been pushed yet, so there is nothing built at 48 kHz.
@@ -152,6 +156,44 @@ class DeviceClockTests(unittest.TestCase):
 
 
 class RateTransitionSafetyTests(unittest.TestCase):
+    def test_882khz_transition_uses_the_same_delay_safety_preflight(self):
+        window = _window()
+        window._selected_rate = 48000
+        window._rates = [48000, 88200, 96000]
+        window._host_delay_quiesced_device = None
+        events = []
+
+        class Device:
+            def quiesce_voicefx_for_host_delay(self, fs, quantum=512):
+                events.append(("quiesce", fs, quantum))
+
+        device = Device()
+        window.ctl = SimpleNamespace(
+            dev=device, submit=lambda function: function(device))
+        with mock.patch.object(io24gtk, "pw_settings", return_value={
+                "clock.allowed-rates": "[ 48000, 88200, 96000 ]",
+        }), mock.patch.object(
+                io24gtk, "pw_set",
+                side_effect=lambda key, value:
+                (events.append((key, value)) or (True, ""))), \
+                mock.patch.object(io24gtk, "alsa_live", return_value={}), \
+                mock.patch.object(
+                    io24gtk.GLib, "idle_add",
+                    side_effect=lambda function, *args: function(*args)):
+            window._rate_changed(_Value(1), None)
+
+        self.assertEqual(events, [
+            ("quiesce", 48000.0, 512),
+            ("clock.force-rate", 88200),
+        ])
+        self.assertEqual(window._selected_rate, 88200)
+
+    def test_safe_staging_rate_never_uses_882khz(self):
+        window = _window()
+        self.assertEqual(
+            window._safe_delay_transition_rate({44100, 88200, 96000}),
+            44100)
+
     def test_pending_96khz_transition_routes_delay_to_host_immediately(self):
         window = _window()
         window._selected_rate = 48000
@@ -272,6 +314,28 @@ class RateTransitionSafetyTests(unittest.TestCase):
         window._fs = 48000.0
         self.assertEqual(window._voicefx_effective_rate(), 48000.0)
 
+    def test_full_setup_load_uses_the_conservative_pending_rate(self):
+        calls = []
+
+        class Backend:
+            _last_preset_load_report = {"host_features": {}}
+
+            @staticmethod
+            def load_preset(path, sample_rate_hz=None):
+                calls.append((path, sample_rate_hz))
+                return 1, 2
+
+        window = _window()
+        window._fs = 48000.0
+        window._selected_rate = 96000
+
+        result, report = window._load_full_host_setup(
+            Backend(), "/tmp/io24-host-setup.json")
+
+        self.assertEqual(result, (1, 2))
+        self.assertEqual(report, {"host_features": {}})
+        self.assertEqual(calls, [("/tmp/io24-host-setup.json", 96000.0)])
+
 
 class RateDependentWriteTests(unittest.TestCase):
     def test_every_resent_write_carries_the_new_rate(self):
@@ -338,67 +402,102 @@ class ReverbRateTests(unittest.TestCase):
         self.assertEqual(kwargs["fs"], 88200.0)
 
 
-class ReverbCharacterTests(unittest.TestCase):
+class ReverbMovementTests(unittest.TestCase):
     def _reverb_window(self):
         window = _window()
-        window.rev_type = _Value(0)
         window.rev_mod = _Value(False)
         window.s_rmoddep = _Depth(0.08)
         return window
 
-    def test_character_state_captures_the_host_only_half(self):
+    def test_movement_state_captures_the_host_only_half(self):
         window = self._reverb_window()
-        window.rev_type.set_selected(3)
         window.rev_mod.set_active(True)
         window.s_rmoddep.set_value(0.12)
-        state = window._reverb_character_state()
-        self.assertEqual(state["type"], 3)
-        self.assertTrue(state["movement"])
-        self.assertAlmostEqual(state["movement_depth"], 0.12)
+        state = window._reverb_movement_state()
+        self.assertEqual(state["version"], 1)
+        self.assertTrue(state["enabled"])
+        self.assertAlmostEqual(state["depth"], 0.12)
 
-    def test_character_round_trips_through_adoption(self):
+    def test_movement_round_trips_through_adoption(self):
         window = self._reverb_window()
-        window.rev_type.set_selected(5)
         window.rev_mod.set_active(True)
         window.s_rmoddep.set_value(0.2)
-        saved = window._reverb_character_state()
+        saved = window._reverb_movement_state()
 
-        window.rev_type.set_selected(0)
         window.rev_mod.set_active(False)
         window.s_rmoddep.set_value(0.0)
-        self.assertIsNone(window._adopt_reverb_character(saved))
-        self.assertEqual(window.rev_type.get_selected(), 5)
+        self.assertIsNone(window._adopt_reverb_movement(saved))
         self.assertTrue(window.rev_mod.get_active())
         self.assertAlmostEqual(window.s_rmoddep.get_value(), 0.2)
 
     def test_adoption_leaves_the_mutes_as_it_found_them(self):
         window = self._reverb_window()
-        window._adopt_reverb_character(window._reverb_character_state())
+        window._adopt_reverb_movement(window._reverb_movement_state())
         self.assertFalse(window._rev_mute)
         self.assertFalse(window._adopt_mute)
 
-    def test_an_unknown_character_is_refused_with_a_notice(self):
+    def test_an_unknown_version_is_refused_with_a_notice(self):
         window = self._reverb_window()
-        notice = window._adopt_reverb_character(
-            {"type": 99, "movement": True, "movement_depth": 0.1})
-        self.assertIn("unknown character", notice)
-        self.assertEqual(window.rev_type.get_selected(), 0)
+        notice = window._adopt_reverb_movement(
+            {"version": 99, "enabled": True, "depth": 0.1})
+        self.assertIn("unknown version", notice)
+        self.assertFalse(window.rev_mod.get_active())
 
     def test_an_out_of_range_depth_is_refused_with_a_notice(self):
         window = self._reverb_window()
-        notice = window._adopt_reverb_character(
-            {"type": 1, "movement": True, "movement_depth": 0.9})
+        notice = window._adopt_reverb_movement(
+            {"version": 1, "enabled": True, "depth": 0.9})
         self.assertIn("outside the control", notice)
         self.assertAlmostEqual(window.s_rmoddep.get_value(), 0.08)
 
     def test_incomplete_saved_values_are_refused_with_a_notice(self):
         window = self._reverb_window()
-        notice = window._adopt_reverb_character({"type": 1})
+        notice = window._adopt_reverb_movement({"version": 1})
         self.assertIn("incomplete", notice)
 
     def test_a_missing_section_is_silent(self):
         window = self._reverb_window()
-        self.assertIsNone(window._adopt_reverb_character(None))
+        self.assertIsNone(window._adopt_reverb_movement(None))
+
+    def test_a_manual_room_size_edit_moves_the_movement_centre(self):
+        window = self._reverb_window()
+        window.rev_mod.set_active(True)
+        window._rev_mod_base = 0.4
+        pushed = []
+        window._push_reverb = lambda: pushed.append(True)
+
+        window._reverb_size_changed(0.73)
+
+        self.assertAlmostEqual(window._rev_mod_base, 0.73)
+        self.assertEqual(pushed, [True])
+
+    def test_a_movement_step_uses_a_nonpersistent_reverb_write(self):
+        window = self._reverb_window()
+        window.rev_on = _Value(True)
+        window.s_rsize = _Value(0.6)
+        window.s_rmix = _Value(0.3)
+        window.s_rhp = _Value(200.0)
+        window.s_rpre = _Value(0.02)
+        window.processing_mix_controls = {1: _Value(1.0)}
+        window.rev_return_controls = {"main": _Value(0.0)}
+        window._rev_mute = True
+
+        window._push_reverb()
+        device = _Device()
+        window.ctl.run(device)
+
+        self.assertEqual(device.calls[-1][0], "set_reverb_transient")
+
+    def test_movement_does_not_write_while_reverb_is_off(self):
+        window = self._reverb_window()
+        window.rev_mod.set_active(True)
+        window.rev_on = _Value(False)
+        window.s_rsize = _Value(0.6)
+        window._rev_mod_t = 0.0
+        window._rev_mod_base = 0.6
+
+        self.assertTrue(window._reverb_mod_step())
+        self.assertAlmostEqual(window.s_rsize.get_value(), 0.6)
 
 
 if __name__ == "__main__":

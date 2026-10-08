@@ -155,6 +155,8 @@ class _Insert:
         self.starts, self.stops = [], 0
         self.channels, self._running = (), False
         self.multiband_channels, self.delay_channels = (), ()
+        self.playback_guard = None
+        self.playback_restores = 0
         self.last_error = "the io24 Input Multiband nodes did not appear"
 
     @property
@@ -166,16 +168,27 @@ class _Insert:
         self.starts.append((sorted(states), capture, sink))
         if self.ok:
             self._running = True
+            self.playback_guard = {
+                "node": sink, "restore_muted": True}
             self.multiband_channels = tuple(sorted(states))
             self.delay_channels = tuple(sorted(delays or {}))
             self.channels = tuple(sorted(
                 set(self.multiband_channels) | set(self.delay_channels)))
         return self.ok
 
-    def stop(self):
+    def stop(self, restore_playback=True):
         self.stops += 1
         self._running, self.channels = False, ()
         self.multiband_channels, self.delay_channels = (), ()
+        if restore_playback:
+            self.restore_playback()
+
+    def restore_playback(self):
+        if self.playback_guard is None:
+            return True
+        self.playback_guard = None
+        self.playback_restores += 1
+        return True
 
 
 class InsertGraphTests(unittest.TestCase):
@@ -260,6 +273,70 @@ class InsertGraphTests(unittest.TestCase):
         self.assertIn(io24_mbc.INSERT_RETURN_SOURCE, io24.Io24.MIXER_SOURCES)
 
 
+class PlaybackGuardTests(unittest.TestCase):
+    def test_a_muted_return_is_opened_then_restored_without_changing_volume(self):
+        commands = []
+        get_volume = iter(("Volume: 0.40 [MUTED]\n", "Volume: 0.40\n"))
+
+        def run(command, **_kwargs):
+            commands.append(command)
+            if command[1] == "get-volume":
+                return SimpleNamespace(returncode=0, stdout=next(get_volume),
+                                       stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(io24_mbc, "node_id", return_value="42"), \
+                mock.patch.object(io24_mbc.shutil, "which",
+                                  return_value="/usr/bin/wpctl"), \
+                mock.patch.object(io24_mbc.subprocess, "run", side_effect=run):
+            guard = io24_mbc.acquire_playback("alsa_output.io24")
+            self.assertEqual(guard, {
+                "node": "alsa_output.io24", "restore_muted": True})
+            self.assertTrue(io24_mbc.release_playback(guard))
+
+        self.assertEqual(commands, [
+            ["wpctl", "get-volume", "42"],
+            ["wpctl", "set-mute", "42", "0"],
+            ["wpctl", "get-volume", "42"],
+            ["wpctl", "set-mute", "42", "1"],
+        ])
+        self.assertFalse(any("set-volume" in command for command in commands))
+
+    def test_zero_volume_is_rejected_instead_of_silently_rerouting_the_input(self):
+        result = SimpleNamespace(returncode=0, stdout="Volume: 0.00\n",
+                                 stderr="")
+        with mock.patch.object(io24_mbc, "node_id", return_value="42"), \
+                mock.patch.object(io24_mbc.shutil, "which",
+                                  return_value="/usr/bin/wpctl"), \
+                mock.patch.object(io24_mbc.subprocess, "run",
+                                  return_value=result):
+            with self.assertRaisesRegex(RuntimeError, "volume is zero"):
+                io24_mbc.acquire_playback("alsa_output.io24")
+
+    def test_failed_unmute_confirmation_rolls_the_original_mute_back(self):
+        commands = []
+        reads = iter((
+            SimpleNamespace(returncode=0,
+                            stdout="Volume: 0.40 [MUTED]\n", stderr=""),
+            SimpleNamespace(returncode=1, stdout="", stderr="gone"),
+        ))
+
+        def run(command, **_kwargs):
+            commands.append(command)
+            if command[1] == "get-volume":
+                return next(reads)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(io24_mbc, "node_id", return_value="42"), \
+                mock.patch.object(io24_mbc.shutil, "which",
+                                  return_value="/usr/bin/wpctl"), \
+                mock.patch.object(io24_mbc.subprocess, "run", side_effect=run):
+            with self.assertRaisesRegex(RuntimeError, "could not be read"):
+                io24_mbc.acquire_playback("alsa_output.io24")
+
+        self.assertEqual(commands[-1],
+                         ["wpctl", "set-mute", "42", "1"])
+
 class InsertStateTests(unittest.TestCase):
     def test_the_default_state_is_valid_and_survives_json(self):
         state = io24_mbc.default_insert_state()
@@ -287,19 +364,24 @@ class InsertStateTests(unittest.TestCase):
                     io24_mbc.validate_insert_state(case)
 
     def test_host_files_accept_multiband_and_the_hosts_own_features(self):
+        host_delay = {
+            "version": 1,
+            "target": 2,
+            "state": {"on": True, "time_s": 0.173,
+                      "feedback": 0.25, "mix": 0.8},
+        }
         features = {
             "multiband_insert": io24_mbc.default_insert_state(),
-            "reverb_character": {"version": 1, "type": 2, "movement": False,
-                                 "movement_depth": 0.1},
+            "reverb_movement": {"version": 1, "enabled": False,
+                                "depth": 0.1},
             "autogain": {"version": 1, "on": [1]},
+            "voicefx_delay": host_delay,
         }
         normalized, migrations = io24._normalise_host_features(features)
         self.assertEqual(normalized, features)
         self.assertEqual(migrations, [])
 
-    def test_a_snapshot_carrying_the_reverb_character_saves_and_loads(self):
-        # The GTK Host saves reverb_character and autogain with its snapshots;
-        # the driver used to refuse them, so such a snapshot failed to save.
+    def test_host_delay_survives_a_full_setup_save_load_round_trip(self):
         class SnapshotIo24(io24.Io24):
             def __init__(self):
                 self._shadow = {}
@@ -310,9 +392,36 @@ class InsertStateTests(unittest.TestCase):
             def read_params(self):
                 return {}
 
-        features = {"reverb_character": {"version": 1, "type": 2,
-                                         "movement": True,
-                                         "movement_depth": 0.2},
+        feature = {
+            "version": 1,
+            "target": 1,
+            "state": {"on": True, "time_s": 0.19,
+                      "feedback": 0.4, "mix": 0.7},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "host-delay.json"
+            SnapshotIo24().save_preset(
+                path, host_features={"voicefx_delay": feature})
+            restored = SnapshotIo24()
+            restored.load_preset(path)
+
+        self.assertEqual(
+            restored._last_preset_load_report["host_features"],
+            {"voicefx_delay": feature})
+
+    def test_a_snapshot_carrying_reverb_movement_saves_and_loads(self):
+        class SnapshotIo24(io24.Io24):
+            def __init__(self):
+                self._shadow = {}
+                self._shadow_dirty = False
+                self._shadow_flushed = 0.0
+                self._shadow_persist = False
+
+            def read_params(self):
+                return {}
+
+        features = {"reverb_movement": {"version": 1, "enabled": True,
+                                        "depth": 0.2},
                     "autogain": {"version": 1, "on": [2]}}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "host.json"
@@ -323,9 +432,24 @@ class InsertStateTests(unittest.TestCase):
             self.assertEqual(
                 restored._last_preset_load_report["host_features"], features)
 
+    def test_legacy_character_state_keeps_only_its_movement(self):
+        normalized, migrations = io24._normalise_host_features({
+            "reverb_character": {
+                "version": 1, "type": 5, "movement": True,
+                "movement_depth": 0.2,
+            },
+        })
+        self.assertEqual(normalized, {
+            "reverb_movement": {"version": 1, "enabled": True,
+                                "depth": 0.2},
+        })
+        self.assertEqual(migrations, [
+            "legacy reverb Character was removed; Movement was retained",
+        ])
+
     def test_a_host_feature_that_is_not_an_object_is_refused(self):
-        with self.assertRaisesRegex(ValueError, "reverb_character"):
-            io24._normalise_host_features({"reverb_character": 2})
+        with self.assertRaisesRegex(ValueError, "reverb_movement"):
+            io24._normalise_host_features({"reverb_movement": 2})
 
     def test_a_snapshot_file_does_not_keep_this_sessions_changes(self):
         state = io24_mbc.default_insert_state()
@@ -454,9 +578,13 @@ class InsertChainTests(unittest.TestCase):
 
     def test_it_is_up_only_once_all_three_nodes_are_present(self):
         chain, _proc = self._chain(io24_mbc.InsertChain.READY_NODES)
-        self.assertTrue(chain.start({2: DEFAULT}, "alsa_input.io24",
-                                    "alsa_output.io24", with_comp=True))
+        guard = {"node": "alsa_output.io24", "restore_muted": True}
+        with mock.patch.object(io24_mbc, "acquire_playback",
+                               return_value=guard):
+            self.assertTrue(chain.start({2: DEFAULT}, "alsa_input.io24",
+                                        "alsa_output.io24", with_comp=True))
         self.assertEqual(chain.channels, (2,))
+        self.assertEqual(chain.playback_guard, guard)
 
     def test_a_missing_node_stops_it_and_says_why(self):
         chain, proc = self._chain({io24_mbc.INSERT_PROCESS_NAME})
@@ -465,6 +593,35 @@ class InsertChainTests(unittest.TestCase):
         self.assertTrue(proc.terminated)
         self.assertEqual(chain.channels, ())
         self.assertIn("did not appear", chain.last_error)
+
+    def test_a_muted_playback_return_that_cannot_open_fails_before_routing(self):
+        chain, proc = self._chain(io24_mbc.InsertChain.READY_NODES)
+        with mock.patch.object(
+                io24_mbc, "acquire_playback",
+                side_effect=RuntimeError("the io24 playback sink stayed muted")):
+            self.assertFalse(chain.start(
+                {1: DEFAULT}, "alsa_input.io24", "alsa_output.io24",
+                with_comp=True))
+        self.assertTrue(proc.terminated)
+        self.assertEqual(chain.channels, ())
+        self.assertIn("stayed muted", chain.last_error)
+
+    def test_stopping_can_hold_the_playback_guard_until_the_feed_is_back(self):
+        chain, _proc = self._chain(io24_mbc.InsertChain.READY_NODES)
+        guard = {"node": "alsa_output.io24", "restore_muted": True}
+        with mock.patch.object(io24_mbc, "acquire_playback",
+                               return_value=guard), \
+                mock.patch.object(io24_mbc, "release_playback",
+                                  return_value=True) as release:
+            self.assertTrue(chain.start(
+                {1: DEFAULT}, "alsa_input.io24", "alsa_output.io24",
+                with_comp=True))
+            chain.stop(restore_playback=False)
+            release.assert_not_called()
+            self.assertEqual(chain.playback_guard, guard)
+            self.assertTrue(chain.restore_playback())
+        release.assert_called_once_with(guard)
+        self.assertIsNone(chain.playback_guard)
 
     def test_live_moves_reach_only_a_running_channel_under_its_prefix(self):
         chain = io24_mbc.InsertChain()
@@ -549,6 +706,10 @@ class ReconcileTests(unittest.TestCase):
         self.pw.clear()
         host.dyn_by_ch[1]["comp"] = False
         host._insert_reconcile()
+        # Keep the return open until the asynchronous device job has restored
+        # the input's direct mixer feed; otherwise switching off creates a mute
+        # gap and an audible click.
+        self.assertEqual(host.insert.playback_restores, 0)
         for job in jobs[1:]:
             job(dev)
         self.assertFalse(host.insert.running)
@@ -556,6 +717,7 @@ class ReconcileTests(unittest.TestCase):
         self.assertTrue(dev.send_assigned("line/ch1", "main"))
         self.assertEqual(self.pw, [("clock.force-quantum", 0)])
         self.assertEqual(self.defaults[-1], "alsa_input.io24")
+        self.assertEqual(host.insert.playback_restores, 1)
 
     def test_an_already_small_buffer_is_left_alone(self):
         self.forced = "64"
@@ -693,7 +855,7 @@ class HostTests(unittest.TestCase):
     def test_the_session_and_snapshots_record_multiband(self):
         state = io24_mbc.default_insert_state()
         host = _bind(SimpleNamespace(
-            _insert_state=lambda: state, _reverb_character_state=lambda: None,
+            _insert_state=lambda: state, _reverb_movement_state=lambda: None,
             _autogain_on={}), "_host_features_state")
         self.assertEqual(host._host_features_state(),
                          {"multiband_insert": state})

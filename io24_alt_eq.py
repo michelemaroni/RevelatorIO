@@ -60,10 +60,9 @@ VINTAGE_DEFAULT = {
     "higain": 0.0,
 }
 
-DEFAULT_DLL = Path(__file__).resolve().parent / (
-    ".superpowers/sdd/2026-08-28-cp34-preset-effect-control/runs/"
-    "20260906T001130-0700-uc472-official-reacquisition/extracted/"
-    "hwaccess/dspusbdevice.dll")
+DEFAULT_DLL = Path(os.environ.get(
+    "XDG_CACHE_HOME", str(Path.home() / ".cache")
+)) / "io24" / "re" / "dspusbdevice.dll"
 
 
 class AlternateEqUnavailable(RuntimeError):
@@ -226,6 +225,15 @@ def design_live_sections(eq, rate_hz=48000.0, dll_path=None):
     )["coefficients"])
     return (("wide", 0, low), ("biquad", 1, high),
             ("biquad", 2, high_mid), ("biquad", 3, low_mid))
+
+
+def design_native_coefficients(eq, dll_path=None):
+    """Return the four-rate coefficient table used by a device block."""
+    eq = validate_eq(eq)
+    image = _image(str(resolve_dll(dll_path)))
+    if model_of(eq) == "passive":
+        return passive.design_eq(image, eq)
+    return vintage.design_eq(image, eq)
 
 
 def section_response(section, frequency_hz, rate_hz):

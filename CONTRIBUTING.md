@@ -17,8 +17,8 @@ python3 -m venv --system-site-packages .venv
 
 Once those pass, run the focused tests for the code you changed. The complete
 release command is in [PUBLICATION.md](PUBLICATION.md). Tests that compare
-against lawfully retained vendor evidence skip clearly when that local evidence
-is absent.
+against locally retained Universal Control evidence skip clearly when that
+local evidence is absent.
 
 Live tests belong in a separately authorized local campaign. Record the exact
 device, route, stimulus, restoration, and result boundary. Live hardware is
@@ -26,10 +26,10 @@ never a CI requirement.
 
 Keep user documentation honest about evidence. A successful USB reply proves a
 write was sent, not cold-boot persistence, stored-body readback, or audibility.
-Host snapshots, UC Device Presets, and the front-panel `Stat` blocks are
-different workflows. Voice FX is one shared processor assigned to one input,
-with one selected model and a separate stored **On** field for every model
-component.
+Full Host setups, UC scenes, UC Device Presets, and the front-panel `Stat`
+blocks are different workflows. Voice FX is one shared processor assigned to
+one input. Each model has a stored `on` field, while UC and both controllers
+normalize the rack so only one model is On at a time.
 
 Do not add Universal Control installers, vendor DLLs or firmware, recovered
 factory data, device serials, local absolute paths, captures, VMs, or agent work

@@ -20,7 +20,6 @@ class ReleasePackageTests(unittest.TestCase):
             "io24_fx.py",
             "io24_mbc.py",
             "io24_voicefx_delay.py",
-            "io24_spring.py",
             "io24_uc_comp.py",
             "io24_meters.py",
             "io24_mixer.py",
@@ -53,7 +52,6 @@ class ReleasePackageTests(unittest.TestCase):
             for source in ROOT.glob("*.py"):
                 shutil.copy2(source, stage / source.name)
             shutil.copy2(ROOT / "io24_uc_comp.c", stage / "io24_uc_comp.c")
-            shutil.copy2(ROOT / "io24_spring.c", stage / "io24_spring.c")
             shutil.copy2(
                 ROOT / "io24_voicefx_delay.c",
                 stage / "io24_voicefx_delay.c")
@@ -120,10 +118,11 @@ class ReleasePackageTests(unittest.TestCase):
             self.assertEqual(missing, set())
             self.assertEqual(required_entry_points - entry_points, set())
             self.assertNotIn("io24web.py", names)
+            self.assertNotIn("io24_spring.py", names)
             self.assertFalse(any(
                 entry.startswith("io24-web =") for entry in entry_points))
             self.assertEqual(len(compressor_source), 1)
-            self.assertEqual(len(spring_source), 1)
+            self.assertEqual(spring_source, [])
             self.assertEqual(len(delay_source), 1)
             self.assertEqual(len(licenses), 1)
             self.assertEqual(vendor_evidence, [])

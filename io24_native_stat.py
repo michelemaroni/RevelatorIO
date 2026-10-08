@@ -12,9 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import base64
 import hashlib
-import importlib.util
 import math
-from pathlib import Path
 import struct
 
 
@@ -531,34 +529,15 @@ def build_native_standard_eq_stat_record(base_record, slot_index, eq):
 
 
 def _alternate_eq_coefficients(eq):
-    """Reuse the exact retained UC designer for Passive/Vintage scenes.
-
-    ponytail: this source-tree fallback avoids copying two large coefficient
-    engines; replace it only when alternate-EQ device saves must work from an
-    installed wheel without the retained analysis artifacts.
-    """
+    """Use the shipped interpreter and the user's local UC 4.7.2 DLL."""
+    import io24_alt_eq
     import io24_presets
 
     model = io24_presets.eq_model(eq)
     if model not in ("passive", "vintage"):
         raise NativeStatFormatError("alternate EQ must be Passive or Vintage")
-    root = Path(__file__).resolve().parent
-    path = root / "re" / ("uc472_%s_eq.py" % model)
-    if not path.is_file():
-        raise NativeStatFormatError(
-            "%s EQ device save needs the retained exact UC designer" %
-            model.title())
     try:
-        spec = importlib.util.spec_from_file_location(
-            "_io24_native_%s_eq" % model, path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        dll = root / module.DEFAULT_DLL
-        if not dll.is_file():
-            dll = (root / ".superpowers" / "sdd" /
-                   "2026-08-28-cp34-preset-effect-control" /
-                   module.DEFAULT_DLL)
-        return module.design_eq(module.Image(dll), eq)
+        return io24_alt_eq.design_native_coefficients(eq)
     except Exception as error:
         raise NativeStatFormatError(
             "%s EQ native design failed: %s" %
@@ -689,10 +668,10 @@ def build_native_slot_record(slot_record, slot_index, sample_rate_hz=96000.0):
                     lows=fx_args["lows"], width=fx_args["width"],
                     mix=fx_args["mix"])
             elif model == "delay":
-                rebuilt = build_native_delay_stat_record(
-                    rebuilt, slot_index, enabled=True,
-                    time_s=fx_args["time_s"], feedback=fx_args["feedback"],
-                    mix=fx_args["mix"])
+                raise NativeStatFormatError(
+                    "active Delay cannot be stored in a device-resident "
+                    "block; save it in a Host setup so rate-safe placement "
+                    "can be chosen when it loads")
             else:
                 raise NativeStatFormatError(
                     "%s FX has no decoded native slot component" %

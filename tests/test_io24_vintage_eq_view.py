@@ -173,7 +173,8 @@ class _Value:
 
 def _eq_widgets():
     W = {key: _Widget() for key in (
-        "curve", "eq_on", "eq_model", "band_on", "shelf", "freq",
+        "curve", "curve_row", "alternate_eq_rack", "alternate_eq_rack_row",
+        "eq_on", "eq_model", "band_on", "shelf", "freq",
         "gain", "q", "eq_flat", "p_bboost", "p_batten", "p_bfreq",
         "p_mboost", "p_bbwidth", "p_mfreq", "p_hatten", "p_hsfreq",
         "v_lowgain", "v_lowfreq", "v_lowmidgain", "v_lowmidfreq",
@@ -183,6 +184,76 @@ def _eq_widgets():
     W["_passive_eq_rows"] = [_Widget() for _ in range(8)]
     W["_vintage_eq_rows"] = [_Widget() for _ in range(7)]
     return W
+
+
+class AlternateEqRackContractTests(unittest.TestCase):
+    def test_passive_rack_exposes_every_exact_uc_control(self):
+        specs = io24gtk.ALTERNATE_EQ_RACK_SPECS["passive"]
+        self.assertEqual([spec["field"] for spec in specs], [
+            "bboost", "batten", "bfreq", "mboost", "bbwidth", "mfreq",
+            "hatten", "hsfreq",
+        ])
+        self.assertEqual(specs[2]["choices"],
+                         ("20 Hz", "30 Hz", "60 Hz", "100 Hz"))
+        self.assertEqual(specs[5]["choices"],
+                         ("3 kHz", "4 kHz", "5 kHz", "8 kHz", "10 kHz",
+                          "12 kHz", "16 kHz"))
+        self.assertEqual(specs[7]["choices"],
+                         ("5 kHz", "10 kHz", "20 kHz"))
+
+    def test_vintage_rack_exposes_every_exact_uc_control(self):
+        specs = io24gtk.ALTERNATE_EQ_RACK_SPECS["vintage"]
+        self.assertEqual([spec["field"] for spec in specs], [
+            "lowgain", "lowfreq", "lowmidgain", "lowmidfreq",
+            "himidgain", "himidfreq", "higain",
+        ])
+        self.assertEqual(specs[1]["choices"],
+                         ("35 Hz", "60 Hz", "110 Hz", "220 Hz"))
+        self.assertEqual(specs[3]["choices"],
+                         ("360 Hz", "700 Hz", "1.6 kHz"))
+        self.assertEqual(specs[5]["choices"],
+                         ("3.2 kHz", "4.8 kHz", "7.2 kHz"))
+
+    def test_every_rack_parameter_has_a_distinct_visual_position(self):
+        for model, specs in io24gtk.ALTERNATE_EQ_RACK_SPECS.items():
+            with self.subTest(model=model):
+                points = {(spec["x"], spec["y"]) for spec in specs}
+                self.assertEqual(len(points), len(specs))
+                for spec in specs:
+                    lo = spec.get("lo", 0)
+                    hi = spec.get("hi", len(spec.get("choices", ())) - 1)
+                    self.assertEqual(
+                        io24gtk.alternate_eq_control_fraction(spec, lo), 0.0)
+                    self.assertEqual(
+                        io24gtk.alternate_eq_control_fraction(spec, hi), 1.0)
+
+    def test_rack_fraction_snaps_selector_fields_and_scales_amounts(self):
+        passive = {s["field"]: s for s in
+                   io24gtk.ALTERNATE_EQ_RACK_SPECS["passive"]}
+        self.assertEqual(io24gtk.alternate_eq_control_value(
+            passive["bfreq"], 0.49), 1)
+        self.assertEqual(io24gtk.alternate_eq_control_value(
+            passive["bfreq"], 0.51), 2)
+        self.assertAlmostEqual(io24gtk.alternate_eq_control_value(
+            passive["bboost"], 0.55), 5.5)
+
+    def test_faceplate_scale_marks_use_exact_decoded_ranges(self):
+        passive = {s["field"]: s for s in
+                   io24gtk.ALTERNATE_EQ_RACK_SPECS["passive"]}
+        vintage = {s["field"]: s for s in
+                   io24gtk.ALTERNATE_EQ_RACK_SPECS["vintage"]}
+        self.assertEqual(io24gtk.alternate_eq_scale_marks(
+            passive["bboost"]), (
+                (0.0, "0"), (0.2, "2"), (0.4, "4"),
+                (0.6, "6"), (0.8, "8"), (1.0, "10")))
+        self.assertEqual(io24gtk.alternate_eq_scale_marks(
+            vintage["lowgain"]), (
+                (0.0, "-16"), (0.25, "-8"), (0.5, "0"),
+                (0.75, "+8"), (1.0, "+16")))
+        self.assertEqual(io24gtk.alternate_eq_scale_marks(
+            passive["bfreq"]), (
+                (0.0, "20"), (1 / 3, "30"), (2 / 3, "60"),
+                (1.0, "100")))
 
 
 def _window():
@@ -209,7 +280,7 @@ def _window():
 class RecalledVintageBodyHostTests(unittest.TestCase):
     @unittest.skipUnless(
         EXACT_ALT_EQ_AVAILABLE,
-        "requires a lawful local UC 4.7.2 dspusbdevice.dll",
+        "requires a local UC 4.7.2 dspusbdevice.dll",
     )
     def test_a_recall_shows_the_rest_and_lists_the_eq(self):
         record = {"preset_name": "MAIN", "eq": dict(VINTAGE),
@@ -236,7 +307,7 @@ class RecalledVintageBodyHostTests(unittest.TestCase):
 
     @unittest.skipUnless(
         EXACT_ALT_EQ_AVAILABLE,
-        "requires a lawful local UC 4.7.2 dspusbdevice.dll",
+        "requires a local UC 4.7.2 dspusbdevice.dll",
     )
     def test_vintage_controls_are_editable_and_send_the_exact_model(self):
         window = _window()
@@ -246,8 +317,10 @@ class RecalledVintageBodyHostTests(unittest.TestCase):
         W = window.w[1]
         self.assertEqual(W["eq_model"].selected, 2)
         self.assertFalse(any(row.visible for row in W["_standard_eq_rows"]))
-        self.assertTrue(all(row.visible for row in W["_vintage_eq_rows"]))
+        self.assertFalse(any(row.visible for row in W["_vintage_eq_rows"]))
         self.assertFalse(any(row.visible for row in W["_passive_eq_rows"]))
+        self.assertFalse(W["curve_row"].visible)
+        self.assertTrue(W["alternate_eq_rack_row"].visible)
         self.assertTrue(W["eq_on"].active)
         self.assertEqual(W["v_lowfreq"].selected, 0)
         self.assertAlmostEqual(W["v_lowgain"].value, 1.76)
@@ -276,6 +349,8 @@ class RecalledVintageBodyHostTests(unittest.TestCase):
         self.assertEqual(window.w[1]["curve"].draws, 1)
         self.assertTrue(all(row.visible
                             for row in window.w[1]["_standard_eq_rows"]))
+        self.assertTrue(window.w[1]["curve_row"].visible)
+        self.assertFalse(window.w[1]["alternate_eq_rack_row"].visible)
 
     def test_linked_edits_skip_a_held_channel_and_say_so_once(self):
         window = _window()
@@ -341,7 +416,7 @@ class RecalledVintageBodyHostTests(unittest.TestCase):
 
     @unittest.skipUnless(
         EXACT_ALT_EQ_AVAILABLE,
-        "requires a lawful local UC 4.7.2 dspusbdevice.dll",
+        "requires a local UC 4.7.2 dspusbdevice.dll",
     )
     def test_power_changes_only_the_selected_model_on_one_input(self):
         window = _window()

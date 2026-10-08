@@ -10,7 +10,8 @@ plugins work unmodified.
 
   ucnet_shim.py [--port N] [--device-id N] [--serial S] [--dry-run]
 
-Derived from re/UCNET_SHIM_SPEC.md. Key constraints honoured here:
+Derived from the UCNET compatibility contract documented in PROTOCOL.md §9.
+Key constraints honoured here:
   * UDP 'DA' announce is SENT to 127.0.0.1:47809 once a second — the port is
     never bound, because the client binds it and only listens.
   * Every UCNET message goes out in exactly ONE write(): the client splits reads
