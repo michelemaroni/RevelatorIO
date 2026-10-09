@@ -1189,11 +1189,14 @@ class Io24:
         self.set_param(2, max(0.0, min(1.0, value)))
 
     def set_gain(self, channel, db):
-        """Preamp gain in dB, 0..60. channel 1..3 ('Para' wire id 3)."""
+        """Preamp/trim gain in dB, channel-range per attached unit
+        ('Para' wire id 3): 0..60 (io24 ch1/2, io44 ch1), 0..30 (io44 ch2),
+        -12..+12 (io44 line-in ch3)."""
         if channel not in self.line_inputs:
             raise ValueError("channel must be %s"
                              % " or ".join(str(c) for c in self.line_inputs))
-        self.set_param(3, max(0.0, min(60.0, db)), index=channel - 1)
+        lo, hi = self.gain_ranges[channel]
+        self.set_param(3, max(lo, min(hi, float(db))), index=channel - 1)
 
     def set_fx_mix(self, channel, value):
         """Per-channel processing/effects mix, 0.0..1.0 (wire id 4).
@@ -1262,9 +1265,11 @@ class Io24:
         self.set_param(10, max(-1.0, min(1.0, value)))
 
     def set_phantom(self, channel, on):
-        """48V phantom power ('Pari' wire id 0)."""
-        if channel not in (1, 2):
-            raise ValueError("channel must be 1 or 2")
+        """48V phantom power ('Pari' wire id 0). The io44's ch2 has none."""
+        if channel not in self.phantom_inputs:
+            raise ValueError("channel must be %s"
+                             % " or ".join(str(c)
+                                            for c in self.phantom_inputs))
         self.set_param(0, 1 if on else 0, index=channel - 1, as_int=True)
 
     def set_highpass(self, channel, on):
@@ -1693,6 +1698,18 @@ class Io24:
     def line_inputs(self):
         """Analog input channel numbers the attached unit actually has."""
         return (1, 2, 3) if self.is_io44 else (1, 2)
+
+    @property
+    def gain_ranges(self):
+        """(lo, hi) dB per input channel's preamp/trim, as attached."""
+        if self.is_io44:
+            return {1: (0.0, 60.0), 2: (0.0, 30.0), 3: (-12.0, 12.0)}
+        return {1: (0.0, 60.0), 2: (0.0, 60.0)}
+
+    @property
+    def phantom_inputs(self):
+        """Input channels that carry a 48V phantom bus."""
+        return (1, 2) if not self.is_io44 else (1,)
 
     # Universal Control's own vocabulary for the same three buses. Its object
     # model gives every channel a `volume`, an `aux1` and an `aux2` (descriptor

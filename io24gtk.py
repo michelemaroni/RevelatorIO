@@ -4083,7 +4083,29 @@ class Win(Adw.ApplicationWindow):
         self.linein_strip.set_visible(show_linein)
         for w in getattr(self, "_linein_routing_widgets", ()):
             w.set_visible(show_linein)
+        self._apply_channel_io(show_linein)
         return True
+
+    def _apply_channel_io(self, io44):
+        """Recalibrate per-input controls that differ between unit types.
+
+        The io44's second mic preamp trims to 0..30 dB and carries no phantom
+        bus; the io24 keeps the familiar 0..60 dB and 48V on both inputs.
+        Built at 0..60 dB, so an io44 rescales just the channel-two fader and
+        hides its 48V button.
+        """
+        f2 = self.gain_faders.get(2)
+        if f2 is not None:
+            if io44:
+                f2.w.get_adjustment().configure(
+                    max(0.0, min(30.0, f2.w.get_value())), 0.0, 30.0,
+                    0.05, 0.0, 0.0)
+            else:
+                f2.w.get_adjustment().configure(
+                    f2.w.get_value(), 0.0, 60.0, 0.05, 0.0, 0.0)
+        ph = getattr(self, "phantom_live", {}).get(2)
+        if ph is not None:
+            ph.w.set_visible(not io44)
 
     def _is_io44(self):
         """Whether the enumerated control device is the twin io44."""
@@ -4378,35 +4400,69 @@ class Win(Adw.ApplicationWindow):
         return b
 
     def _input_strip(self, ch):
-        indicator = PresetIndicator()
+        # ponytail: the io44 line-in gets no preset indicator — line presets
+        # belong to the still-2-channel fat-channel page; _tick sync assumes (1,2).
+        indicator = PresetIndicator() if ch != 3 else None
         self.preset_indicators = getattr(self, "preset_indicators", {})
-        self.preset_indicators[ch] = indicator
+        if indicator is not None:
+            self.preset_indicators[ch] = indicator
         title = "Line in" if ch == 3 else "Channel %d" % ch
         box = self._strip(title, title_suffix=indicator)
         row = mixer_fader_bank(8)           # 260 px is a floor; it grows
         m = Meter()
         self.meters["in%d" % ch] = m
         row.append(m)
-        f = fader(0, 60, 0.05)
-        reset_on_double_click(f, 0.0, lambda v: "%.1f dB" % v)
-        row.append(f)
-        box.append(row)
 
-        val = Gtk.Label(label="0.0 dB")
-        val.add_css_class("numeric")
-        box.append(val)
-        f.connect("value-changed", lambda w: val.set_text("%.1f dB" % w.get_value()))
+        def fader_column(f, label_fn, name):
+            reset_on_double_click(f, 0.0, label_fn)
+            c = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            v = Gtk.Label(label=label_fn(0.0))
+            v.add_css_class("numeric")
+            f.connect("value-changed",
+                      lambda w: v.set_text(label_fn(w.get_value())))
+            c.append(f); c.append(v)
+            lab = Gtk.Label(label=name)
+            lab.add_css_class("caption"); lab.add_css_class("dim-label")
+            c.append(lab)
+            row.append(c)
+
+        # Level: the channel's level into Main, -60..0 (mirrors the routing
+        # main cell; both push the same set_send_db and _sync_mix_widgets
+        # pulls both). A stereo line-in fades both legs at once.
+        lf = fader(-60.0, 0.0, 0.1)
+        lvl_thr = Throttle(
+            lambda v, c=ch: self.ctl.submit(
+                lambda dev: dev.set_send_db("line/ch%d" % c, "main", v)),
+            0.002)
+
+        def level_moved(w, t=lvl_thr):
+            if not self._mix_mute:
+                t(w.get_value())
+        lf.connect("value-changed", level_moved)
+        fader_column(lf, lambda v: "%.1f dB" % v, "Level")
+        self.level_widgets = getattr(self, "level_widgets", {})
+        self.level_widgets[ch] = lf
+
+        # Gain/Trim (preamp): 0..60 for ch1, 0..30 for the io44's ch2, -12..12
+        # for the stereo line-in. The io44 fixes channel two's range at attach.
+        f = fader(-12.0, 12.0, 0.05) if ch == 3 else fader(0, 60, 0.05)
+        fader_column(f, lambda v: "%.1f dB" % v,
+                     "Trim" if ch == 3 else "Gain")
         self.live.append(Live(f, lambda v, c=ch: self._set("gain", c, v)))
         self.gain_faders = getattr(self, "gain_faders", {})
         self.gain_faders[ch] = self.live[-1]
-        auto = Gtk.ToggleButton(label="Auto")
-        auto.set_margin_start(6); auto.set_margin_end(6)
-        auto.set_tooltip_text(
-            "Measure full three-second windows and adjust in quiet gaps")
-        auto.connect("toggled", self._autogain_toggled, ch)
-        box.append(auto)
+        box.append(row)
+
+        if ch != 3:
+            auto = Gtk.ToggleButton(label="Auto")
+            auto.set_margin_start(6); auto.set_margin_end(6)
+            auto.set_tooltip_text(
+                "Measure full three-second windows and adjust in quiet gaps")
+            auto.connect("toggled", self._autogain_toggled, ch)
+            box.append(auto)
         self.autogain_toggles = getattr(self, "autogain_toggles", {})
-        self.autogain_toggles[ch] = auto
+        if ch != 3:
+            self.autogain_toggles[ch] = auto
 
         # A line input (io44 ch3) carries no phantom bus, so it gets no 48V
         # button; its mute/HPF are write-only, exactly as they already are on
@@ -4474,6 +4530,33 @@ class Win(Adw.ApplicationWindow):
                 pair.append(m)
             grid.attach(pair, column, 1, 1, 1)
         box.append(grid)
+
+        # Each bus's Level (-60..0 dB), the same host-side master the Routing
+        # "Master" row drives — two faces of the one set_bus_master value.
+        brow = mixer_fader_bank(12, homogeneous=True)
+        brow.set_margin_start(16); brow.set_margin_end(16)
+        brow.set_margin_top(10)
+        self.bus_level_widgets = {}
+        for bus, bname in (("main", "Main"), ("mixa", "Mix A"), ("mixb", "Mix B")):
+            c = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            f = fader(-60.0, 0.0, 0.1)
+            reset_on_double_click(f, 0.0, lambda v: "%.1f dB" % v)
+            v = Gtk.Label(label="0.0 dB"); v.add_css_class("numeric")
+            f.connect("value-changed", lambda w, l=v: l.set_text("%.1f dB" % w.get_value()))
+            mthr = Throttle(
+                lambda v, b=bus: self.ctl.submit(
+                    lambda dev: dev.set_bus_master(b, v)), 0.010)
+
+            def bus_level_moved(w, t=mthr):
+                if not self._mix_mute:
+                    t(w.get_value())
+            f.connect("value-changed", bus_level_moved)
+            self.bus_level_widgets[bus] = f
+            lab = Gtk.Label(label=bname)
+            lab.add_css_class("caption"); lab.add_css_class("dim-label")
+            c.append(f); c.append(v); c.append(lab)
+            brow.append(c)
+        box.append(brow)
         box.append(Gtk.Box(height_request=8))
         return box
 
@@ -6522,6 +6605,12 @@ class Win(Adw.ApplicationWindow):
                     off.set_tooltip_text("Add to mix at 0 dB")
             for bus, msc in self.bus_master_widgets.items():
                 msc.set_value(max(-40.0, min(10.0, dev.bus_master(bus))))
+            for bus, lf in getattr(self, "bus_level_widgets", {}).items():
+                lf.set_value(max(-60.0, min(0.0, dev.bus_master(bus))))
+            for ch, lf in getattr(self, "level_widgets", {}).items():
+                lvl = dev.send_db("line/ch%d" % ch, "main")
+                if lvl is not None:
+                    lf.set_value(max(-60.0, min(0.0, lvl)))
             for source, mute in getattr(
                     self, "source_mute_widgets", {}).items():
                 mute.set_active(dev.source_muted(source))

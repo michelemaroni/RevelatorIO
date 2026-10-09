@@ -680,15 +680,25 @@ class HostStateRepairTests(unittest.TestCase):
         self.assertNotIn("line/ch3", io24_dev.SOLO_SOURCES)
 
         io44 = _ModeledIo24(0x0424)
-        io44.set_gain(3, 30.0)
+        io44.set_gain(3, 30.0)          # line-in trim clamps -12..+12
+        io44.set_gain(3, -20.0)
+        io44.set_gain(2, 45.0)          # io44 channel two clamps at +30
         io44.set_mute(3, True)
         io44.set_highpass(3, True)
         with self.assertRaises(ValueError):
+            io44.set_phantom(2, True)
+        with self.assertRaises(ValueError):
             io44.set_phantom(3, True)
         self.assertIn("line/ch3", tuple(io44.SOLO_SOURCES))
-        self.assertEqual(len(io44.param_calls), 3)
-        self.assertEqual(
-            io44.param_calls[0][1]["index"], 2)   # index 2 = ch3
+        gains = [c[0][1] for c in io44.param_calls
+                 if c[0][0] == 3]
+        self.assertEqual(gains, [12.0, -12.0, 30.0])
+        indexes = [c[1]["index"] for c in io44.param_calls
+                   if c[0][0] == 3]
+        self.assertEqual(indexes, [2, 2, 1])
+
+        io24_phantom = _ModeledIo24(0x0422)
+        io24_phantom.set_phantom(2, True)     # io24 keeps 48V on both mics
 
 if __name__ == "__main__":
     unittest.main()
